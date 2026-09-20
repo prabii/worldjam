@@ -29,6 +29,28 @@ export const colors = {
   danger: '#F87171',
   ai: '#A78BFA',
   aiDim: 'rgba(167, 139, 250, 0.16)',
+
+  /** The cyan the mockups use for selection and AR chrome. */
+  vibe: '#38BDF8',
+  vibeDim: 'rgba(56, 189, 248, 0.16)',
+
+  /**
+   * Per-object accents, matching the neon outlines in the mockups. Assigned in
+   * order as objects are captured, so a session looks like the panels do.
+   */
+  objectPalette: [
+    '#FF7A45', // mug - orange
+    '#FFC53D', // table - amber
+    '#FF4D6D', // keys - red
+    '#4DA6FF', // bottle - blue
+    '#52C41A', // plant - green
+    '#9254DE', // laptop - purple
+    '#36CFC9', // teal
+    '#F759AB', // pink
+    '#FFA940', // light orange
+    '#597EF7', // indigo
+    '#73D13D', // lime
+  ] as string[],
 } as const;
 
 export const spacing = {

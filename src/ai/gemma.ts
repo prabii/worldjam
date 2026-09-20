@@ -191,11 +191,13 @@ export function parseStyleCommand(text: string): Style | null {
   const t = text.toLowerCase();
   const table: Array<[RegExp, Style]> = [
     [/jazz|swing|bebop/, 'jazz'],
-    [/lo-?fi|chill|study|mellow/, 'lofi'],
+    // 'lo-fi' before 'chill': the two overlap in everyday use, and lo-fi is
+    // the more specific request, so it must be tested first.
+    [/lo-?fi|study|mellow|tape|dusty/, 'lofi'],
     [/cinema|epic|film|movie|trailer|orchestr/, 'cinematic'],
-    [/electro|techno|edm|house|dance|club/, 'electronic'],
+    [/electro|techno|edm|house|dance|club/, 'edm'],
     [/rock|punk|metal|band/, 'rock'],
-    [/natural|normal|default|original|plain/, 'natural'],
+    [/chill|natural|normal|default|original|plain|relax|calm/, 'chill'],
   ];
   for (const [re, style] of table) {
     if (re.test(t)) return style;

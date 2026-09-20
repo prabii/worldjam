@@ -17,7 +17,7 @@ import type {
  * reports what it had to fix.
  */
 
-const STYLES: Style[] = ['natural', 'jazz', 'lofi', 'cinematic', 'electronic', 'rock'];
+const STYLES: Style[] = ['chill', 'jazz', 'lofi', 'cinematic', 'edm', 'rock'];
 const LAYERS: AccompanimentLayer[] = ['bass', 'chords', 'pad', 'arp', 'guitar'];
 const VOICE_ROLES = ['lead', 'harmony', 'texture', 'none'] as const;
 
@@ -173,8 +173,8 @@ export function validatePlan(
   }
 
   // --- style ---
-  const style = STYLES.includes(raw.style as Style) ? (raw.style as Style) : 'natural';
-  if (style !== raw.style) repairs.push(`unknown style "${raw.style}" defaulted to natural`);
+  const style = STYLES.includes(raw.style as Style) ? (raw.style as Style) : 'chill';
+  if (style !== raw.style) repairs.push(`unknown style "${raw.style}" defaulted to chill`);
 
   return {
     plan: {

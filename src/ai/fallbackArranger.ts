@@ -21,7 +21,7 @@ import type {
 type RolePatterns = Record<MusicalRole, number[]>;
 
 const STYLE_PATTERNS: Record<Style, RolePatterns> = {
-  natural: {
+  chill: {
     kick: [1, 3],
     snare: [2, 4],
     hat: [1, 2, 3, 4],
@@ -58,7 +58,7 @@ const STYLE_PATTERNS: Record<Style, RolePatterns> = {
     lead: [1],
     texture: [1, 3],
   },
-  electronic: {
+  edm: {
     kick: [1, 2, 3, 4],
     snare: [2, 4],
     hat: [1.5, 2.5, 3.5, 4.5],
@@ -79,20 +79,20 @@ const STYLE_PATTERNS: Record<Style, RolePatterns> = {
 };
 
 const STYLE_BPM: Record<Style, number> = {
-  natural: 92,
+  chill: 92,
   jazz: 120,
   lofi: 78,
   cinematic: 70,
-  electronic: 128,
+  edm: 128,
   rock: 110,
 };
 
 const STYLE_LAYERS: Record<Style, AccompanimentLayer[]> = {
-  natural: ['bass'],
+  chill: ['bass'],
   jazz: ['bass', 'chords'],
   lofi: ['bass', 'chords', 'pad'],
   cinematic: ['pad', 'chords'],
-  electronic: ['bass', 'arp'],
+  edm: ['bass', 'arp'],
   rock: ['bass', 'guitar'],
 };
 
@@ -103,7 +103,7 @@ const STYLE_LAYERS: Record<Style, AccompanimentLayer[]> = {
  */
 export function buildFallbackPlan(
   objects: WorldJamObject[],
-  style: Style = 'natural',
+  style: Style = 'chill',
   bpmHint?: number | null,
 ): ArrangementPlan {
   const patterns = STYLE_PATTERNS[style];

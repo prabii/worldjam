@@ -14,6 +14,11 @@ export type ObjectCategory =
   | 'box'
   | 'book'
   | 'phone'
+  | 'plant'
+  | 'laptop'
+  /** Body percussion — shown as a capture source in the mockups. */
+  | 'clap'
+  | 'voice'
   | 'unknown';
 
 /** Lightweight DSP descriptors computed locally from a captured sample. */
@@ -89,7 +94,11 @@ export interface NoteEvent {
   confidence: number;
 }
 
-export type Style = 'natural' | 'jazz' | 'lofi' | 'cinematic' | 'electronic' | 'rock';
+/**
+ * The six vibes, named as the product mockups label them.
+ * 'chill' is the unprocessed/natural feel; 'edm' is the four-on-the-floor one.
+ */
+export type Style = 'chill' | 'jazz' | 'lofi' | 'cinematic' | 'edm' | 'rock';
 
 /** The strict JSON contract from HLD v2 §4. Validated before it reaches audio. */
 export interface ArrangementPlan {

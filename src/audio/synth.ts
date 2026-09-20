@@ -32,11 +32,11 @@ export function midiToHz(midi: number): number {
 /** Chord degrees per style, as semitone offsets from the key root. */
 const PROGRESSIONS: Record<Style, number[]> = {
   // i - VI - III - VII: the standard emotive minor loop.
-  natural: [0, 5, 7, 5],
+  chill: [0, 5, 7, 5],
   jazz: [0, 5, 7, 10],
   lofi: [0, 9, 5, 7],
   cinematic: [0, 8, 5, 3],
-  electronic: [0, 7, 9, 5],
+  edm: [0, 7, 9, 5],
   rock: [0, 7, 5, 5],
 };
 

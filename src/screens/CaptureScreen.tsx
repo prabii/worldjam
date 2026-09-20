@@ -1,5 +1,6 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
+  LayoutChangeEvent,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -9,37 +10,48 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ARObjectLabel } from '@/components/ARObjectLabel';
 import { CaptureButton } from '@/components/CaptureButton';
 import { LatencyBadge } from '@/components/LatencyBadge';
-import { SoundObjectCard } from '@/components/SoundObjectCard';
+import { ObjectIcon } from '@/components/ObjectIcon';
+import { Waveform } from '@/components/Waveform';
 import { useSession } from '@/state/sessionStore';
 import type { ObjectCategory } from '@/types';
 import { colors, radius, spacing, type } from '@/theme';
 
 /**
- * Suggested labels. Object *detection* is explicitly cosmetic per HLD v2 §2 —
- * "you do not need AI to know it is a mug to sample its sound" — so this is a
- * quick-pick list plus free text, not a classifier.
+ * Quick-pick object types, matching the objects shown in the mockups.
+ *
+ * Object *detection* is explicitly cosmetic per HLD v2 §2 — "you do not need
+ * AI to know it is a mug to sample its sound" — so this is a picker plus free
+ * text, not a classifier. It costs nothing and never misidentifies anything.
  */
 const SUGGESTIONS: Array<{ label: string; category: ObjectCategory }> = [
-  { label: 'Cup', category: 'cup' },
+  { label: 'Mug', category: 'cup' },
   { label: 'Table', category: 'table' },
-  { label: 'Bottle', category: 'bottle' },
   { label: 'Keys', category: 'keys' },
+  { label: 'Bottle', category: 'bottle' },
+  { label: 'Laptop', category: 'laptop' },
+  { label: 'Plant', category: 'plant' },
   { label: 'Glass', category: 'glass' },
-  { label: 'Box', category: 'box' },
-  { label: 'Book', category: 'book' },
-  { label: 'Phone', category: 'phone' },
+  { label: 'Clap', category: 'clap' },
 ];
 
 export function CaptureScreen({ onDone }: { onDone: () => void }) {
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
-  const [label, setLabel] = useState('Cup');
+  const [label, setLabel] = useState('Mug');
   const [category, setCategory] = useState<ObjectCategory>('cup');
   const [cameraOn, setCameraOn] = useState(true);
+  const [stage, setStage] = useState({ width: 0, height: 0 });
+
+  // Where the next capture anchors. Set by tapping the camera view, so
+  // objects land where the user pointed rather than in a preset grid.
+  const nextSpot = useRef<{ x: number; y: number } | null>(null);
+  const [marker, setMarker] = useState<{ x: number; y: number } | null>(null);
 
   const objects = useSession((s) => s.objects);
+  const pcmBySlot = useSession((s) => s.pcmBySlot);
   const recording = useSession((s) => s.recording);
   const statusMessage = useSession((s) => s.statusMessage);
   const beginCapture = useSession((s) => s.beginCapture);
@@ -52,8 +64,25 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
     [objects],
   );
 
+  const onStageLayout = useCallback((e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    setStage({ width, height });
+  }, []);
+
+  const handleStagePress = useCallback(
+    (e: { nativeEvent: { locationX: number; locationY: number } }) => {
+      if (stage.width === 0) return;
+      const x = e.nativeEvent.locationX / stage.width;
+      const y = e.nativeEvent.locationY / stage.height;
+      nextSpot.current = { x, y };
+      setMarker({ x, y });
+    },
+    [stage],
+  );
+
   const handleStart = useCallback(() => {
     const trimmed = label.trim() || 'Object';
+
     // Duplicate labels would make the AI's object references ambiguous, so
     // disambiguate rather than reject the capture.
     let finalLabel = trimmed;
@@ -61,38 +90,98 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
     while (usedLabels.has(finalLabel.toLowerCase())) {
       finalLabel = `${trimmed} ${n++}`;
     }
-    beginCapture({
-      kind: 'object',
-      label: finalLabel,
-      category,
-      // Spread captures across the stereo field as they are added.
-      x: 0.15 + ((objects.length * 0.23) % 0.7),
-      y: 0.3 + ((objects.length * 0.17) % 0.4),
-    });
+
+    // Fall back to a spread position when nothing was tapped.
+    const spot = nextSpot.current ?? {
+      x: 0.2 + ((objects.length * 0.27) % 0.6),
+      y: 0.25 + ((objects.length * 0.19) % 0.45),
+    };
+
+    beginCapture({ kind: 'object', label: finalLabel, category, x: spot.x, y: spot.y });
   }, [beginCapture, category, label, objects.length, usedLabels]);
 
+  const handleFinish = useCallback(async () => {
+    await finishCapture();
+    nextSpot.current = null;
+    setMarker(null);
+  }, [finishCapture]);
+
+  const isRecording = recording?.kind === 'object';
   const cameraDenied = permission != null && !permission.granted;
 
   return (
     <View style={styles.root}>
-      {cameraOn && permission?.granted ? (
-        <CameraView style={StyleSheet.absoluteFill} facing="back" />
-      ) : (
-        <View style={[StyleSheet.absoluteFill, styles.noCamera]} />
-      )}
+      {/* --- camera stage with AR anchors --- */}
+      <Pressable style={styles.stage} onPress={handleStagePress} onLayout={onStageLayout}>
+        {cameraOn && permission?.granted ? (
+          <CameraView style={StyleSheet.absoluteFill} facing="back" />
+        ) : (
+          <View style={[StyleSheet.absoluteFill, styles.noCamera]} />
+        )}
 
-      <View style={[StyleSheet.absoluteFill, styles.scrim]} pointerEvents="none" />
+        {/* Only a light scrim: the mockups let the room show through. */}
+        <View style={[StyleSheet.absoluteFill, styles.scrim]} pointerEvents="none" />
 
-      <View style={[styles.top, { paddingTop: insets.top + spacing.sm }]}>
-        <View>
-          <Text style={styles.title}>Capture</Text>
-          <Text style={styles.subtitle}>
-            {objects.length === 0
-              ? 'Hold the button and hit the object'
-              : `${objects.length} sound${objects.length === 1 ? '' : 's'} captured`}
-          </Text>
+        {stage.width > 0 &&
+          objects.map((o) => (
+            <ARObjectLabel
+              key={o.id}
+              object={o}
+              pcm={pcmBySlot.get(o.slot) ?? null}
+              containerWidth={stage.width}
+              containerHeight={stage.height}
+              onTrigger={playObject}
+              onLongPress={removeObject}
+            />
+          ))}
+
+        {marker && stage.width > 0 && (
+          <View
+            pointerEvents="none"
+            style={[
+              styles.marker,
+              {
+                left: marker.x * stage.width - 26,
+                top: marker.y * stage.height - 26,
+              },
+            ]}
+          >
+            <View style={styles.markerRing} />
+          </View>
+        )}
+      </Pressable>
+
+      {/* --- top bar --- */}
+      <View style={[styles.top, { paddingTop: insets.top + spacing.sm }]} pointerEvents="box-none">
+        <View style={styles.brand}>
+          <View style={styles.brandBars}>
+            {[10, 16, 12, 18].map((h, i) => (
+              <View key={i} style={[styles.brandBar, { height: h }]} />
+            ))}
+          </View>
+          <Text style={styles.brandText}>WorldJam</Text>
         </View>
         <LatencyBadge compact />
+      </View>
+
+      {/* --- status line --- */}
+      <View style={styles.statusWrap} pointerEvents="none">
+        <View style={styles.statusPill}>
+          <View
+            style={[
+              styles.statusDot,
+              { backgroundColor: isRecording ? colors.accent : colors.live },
+            ]}
+          />
+          <Text style={styles.statusText}>
+            {isRecording
+              ? 'Recording real sound…'
+              : statusMessage ??
+                (objects.length === 0
+                  ? 'Tap where the object is, then hold & hit it'
+                  : `${objects.length} instrument${objects.length === 1 ? '' : 's'} ready`)}
+          </Text>
+        </View>
       </View>
 
       {cameraDenied && (
@@ -103,50 +192,37 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
         </Pressable>
       )}
 
-      <View style={styles.spacer} />
-
-      {objects.length > 0 && (
+      {/* --- bottom sheet --- */}
+      <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}>
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.cards}
+          contentContainerStyle={styles.picker}
         >
-          {objects.map((o) => (
-            <SoundObjectCard
-              key={o.id}
-              object={o}
-              beatPulse={0}
-              onTrigger={playObject}
-              onLongPress={removeObject}
-            />
-          ))}
-        </ScrollView>
-      )}
-
-      <View style={[styles.bottom, { paddingBottom: insets.bottom + spacing.lg }]}>
-        {statusMessage && <Text style={styles.status}>{statusMessage}</Text>}
-
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.suggestions}
-        >
-          {SUGGESTIONS.map((s) => (
-            <Pressable
-              key={s.label}
-              onPress={() => {
-                setLabel(s.label);
-                setCategory(s.category);
-              }}
-              style={[styles.suggestion, label === s.label && styles.suggestionActive]}
-            >
-              <Text
-                style={[styles.suggestionText, label === s.label && styles.suggestionTextActive]}
+          {SUGGESTIONS.map((s) => {
+            const active = label === s.label;
+            return (
+              <Pressable
+                key={s.label}
+                onPress={() => {
+                  setLabel(s.label);
+                  setCategory(s.category);
+                }}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+                style={[styles.pick, active && styles.pickActive]}
               >
-                {s.label}
-              </Text>
-            </Pressable>
-          ))}
+                <ObjectIcon
+                  category={s.category}
+                  color={active ? colors.vibe : colors.textDim}
+                  size={20}
+                />
+                <Text style={[styles.pickText, active && styles.pickTextActive]}>
+                  {s.label}
+                </Text>
+              </Pressable>
+            );
+          })}
         </ScrollView>
 
         <View style={styles.controls}>
@@ -159,16 +235,16 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
             placeholder="Name it"
             placeholderTextColor={colors.textFaint}
             style={styles.input}
-            maxLength={16}
+            maxLength={14}
             accessibilityLabel="Object name"
           />
 
           <CaptureButton
-            recording={recording?.kind === 'object'}
+            recording={isRecording}
             label="Hold & hit"
-            hint="tap the object while holding"
+            hint={marker ? 'placed — now hit it' : 'tap the view first'}
             onStart={handleStart}
-            onStop={finishCapture}
+            onStop={handleFinish}
           />
 
           <Pressable
@@ -183,6 +259,35 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
           </Pressable>
         </View>
 
+        {/* Captured strip — panel 2's "Captured!" confirmation. */}
+        {objects.length > 0 && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.strip}
+          >
+            {objects.map((o) => (
+              <Pressable
+                key={o.id}
+                onPress={() => playObject(o.id)}
+                onLongPress={() => removeObject(o.id)}
+                accessibilityRole="button"
+                accessibilityLabel={`Play ${o.label}`}
+                style={[styles.stripItem, { borderColor: o.color }]}
+              >
+                <ObjectIcon category={o.category} color={o.color} size={16} />
+                <Waveform
+                  pcm={pcmBySlot.get(o.slot) ?? null}
+                  width={52}
+                  height={18}
+                  color={o.color}
+                  bars={16}
+                />
+              </Pressable>
+            ))}
+          </ScrollView>
+        )}
+
         <Pressable onPress={() => setCameraOn((v) => !v)} style={styles.cameraToggle}>
           <Text style={styles.cameraToggleText}>
             {cameraOn ? 'Hide camera' : 'Show camera'}
@@ -195,18 +300,49 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
+  stage: { ...StyleSheet.absoluteFillObject },
   noCamera: { backgroundColor: '#0B0D12' },
-  scrim: { backgroundColor: 'rgba(8,9,12,0.55)' },
+  scrim: { backgroundColor: 'rgba(8,9,12,0.25)' },
+
+  marker: { position: 'absolute', width: 52, height: 52 },
+  markerRing: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 2,
+    borderColor: colors.vibe,
+    borderStyle: 'dashed',
+  },
+
   top: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
+    alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.md,
   },
-  title: { ...type.display, color: colors.text },
-  subtitle: { ...type.body, color: colors.textDim },
+  brand: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  brandBars: { flexDirection: 'row', alignItems: 'flex-end', gap: 2, height: 18 },
+  brandBar: { width: 3, borderRadius: 2, backgroundColor: colors.vibe },
+  brandText: { ...type.title, color: colors.text },
+
+  statusWrap: { alignItems: 'center', marginTop: spacing.md },
+  statusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(10,12,16,0.82)',
+    borderWidth: 1,
+    borderColor: colors.border,
+    maxWidth: '90%',
+  },
+  statusDot: { width: 7, height: 7, borderRadius: 4 },
+  statusText: { ...type.caption, color: colors.text, fontWeight: '600' },
+
   permission: {
+    marginTop: spacing.md,
     marginHorizontal: spacing.lg,
     padding: spacing.md,
     borderRadius: radius.md,
@@ -215,31 +351,32 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   permissionText: { ...type.caption, color: colors.textDim, fontWeight: '500' },
-  spacer: { flex: 1 },
-  cards: { gap: spacing.md, paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
-  bottom: {
+
+  sheet: {
+    marginTop: 'auto',
     gap: spacing.md,
     paddingTop: spacing.lg,
-    backgroundColor: 'rgba(8,9,12,0.82)',
+    backgroundColor: 'rgba(8,9,12,0.92)',
+    borderTopLeftRadius: radius.xl,
+    borderTopRightRadius: radius.xl,
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  status: {
-    ...type.label,
-    color: colors.live,
-    textAlign: 'center',
-  },
-  suggestions: { gap: spacing.sm, paddingHorizontal: spacing.lg },
-  suggestion: {
+  picker: { gap: spacing.sm, paddingHorizontal: spacing.lg },
+  pick: {
+    alignItems: 'center',
+    gap: 3,
     paddingHorizontal: spacing.md,
-    paddingVertical: 6,
-    borderRadius: radius.pill,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
+    minWidth: 62,
   },
-  suggestionActive: { borderColor: colors.accent, backgroundColor: colors.accentDim },
-  suggestionText: { ...type.caption, color: colors.textDim },
-  suggestionTextActive: { color: colors.accent },
+  pickActive: { borderColor: colors.vibe, backgroundColor: colors.vibeDim },
+  pickText: { ...type.caption, fontSize: 10, color: colors.textDim },
+  pickTextActive: { color: colors.vibe },
+
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -247,7 +384,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
   },
   input: {
-    width: 90,
+    width: 88,
     ...type.body,
     color: colors.text,
     paddingVertical: spacing.sm,
@@ -258,15 +395,28 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
   },
   next: {
-    width: 90,
+    width: 88,
     paddingVertical: spacing.md,
     borderRadius: radius.md,
     alignItems: 'center',
-    backgroundColor: colors.accent,
+    backgroundColor: colors.vibe,
   },
   nextDisabled: { backgroundColor: colors.surfaceRaised },
   nextText: { ...type.label, color: colors.bg },
   nextTextDisabled: { color: colors.textFaint },
+
+  strip: { gap: spacing.sm, paddingHorizontal: spacing.lg },
+  stripItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    backgroundColor: colors.surfaceRaised,
+  },
+
   cameraToggle: { alignSelf: 'center' },
   cameraToggleText: { ...type.caption, color: colors.textFaint },
 });

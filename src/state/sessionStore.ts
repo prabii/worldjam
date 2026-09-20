@@ -26,6 +26,7 @@ import {
 import { renderLayer } from '@/audio/synth';
 import { encodeWav, mixSession, toBase64 } from '@/audio/render';
 import * as FileSystem from 'expo-file-system';
+import * as Sharing from 'expo-sharing';
 import { planToLoopEvents, transport } from '@/audio/transport';
 import {
   detectKey,
@@ -46,11 +47,10 @@ import {
 import { generatePlan, parseStyleCommand } from '@/ai/gemma';
 import { buildFallbackPlan, restylePlan } from '@/ai/fallbackArranger';
 
-const OBJECT_COLORS = [
-  '#FF6B5B', '#4ECDC4', '#FFD166', '#A78BFA',
-  '#F472B6', '#34D399', '#60A5FA', '#FB923C',
-  '#C084FC', '#2DD4BF', '#FACC15',
-];
+import { colors as themeColors } from '@/theme';
+
+/** Neon accents matching the object outlines in the product mockups. */
+const OBJECT_COLORS = themeColors.objectPalette;
 
 export type CaptureTarget =
   | { kind: 'object'; label: string; category: ObjectCategory; x: number; y: number }
@@ -84,6 +84,10 @@ interface SessionState {
   accuracyAfter: number | null;
   lastPlanInfo: string | null;
   statusMessage: string | null;
+  /** True while a mixdown is being rendered and written. */
+  exporting: boolean;
+  /** Path of the most recent export, for sharing without re-rendering. */
+  lastExportPath: string | null;
 
   // --- live performance recording ---
   armed: boolean;
@@ -107,6 +111,7 @@ interface SessionState {
   clearLiveLoop: () => void;
   setStatus: (msg: string | null) => void;
   exportTrack: () => Promise<string | null>;
+  shareTrack: () => Promise<void>;
   reset: () => void;
 }
 
@@ -130,7 +135,7 @@ export const useSession = create<SessionState>((set, get) => ({
   plan: null,
   bpm: 92,
   bars: 4,
-  style: 'natural',
+  style: 'chill',
   key: null,
 
   recording: null,
@@ -142,6 +147,8 @@ export const useSession = create<SessionState>((set, get) => ({
   accuracyAfter: null,
   lastPlanInfo: null,
   statusMessage: null,
+  exporting: false,
+  lastExportPath: null,
 
   armed: false,
   liveEvents: [],
@@ -239,6 +246,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
     set({
       objects: [...state.objects, obj],
+      lastExportPath: null,
       statusMessage: `${target.label} captured → ${role}`,
     });
 
@@ -441,12 +449,13 @@ export const useSession = create<SessionState>((set, get) => ({
 
   exportTrack: async () => {
     const state = get();
+    if (state.exporting) return null;
     if (state.loops.length === 0) {
       set({ statusMessage: 'Nothing to export yet.' });
       return null;
     }
 
-    set({ statusMessage: 'Rendering…' });
+    set({ exporting: true, statusMessage: 'Rendering…' });
 
     try {
       const samples = new Map<number, number[]>(state.pcmBySlot);
@@ -473,13 +482,40 @@ export const useSession = create<SessionState>((set, get) => ({
       });
 
       const seconds = mixed.length / 2 / sampleRate();
-      set({ statusMessage: `Exported ${seconds.toFixed(1)}s track` });
+      set({
+        exporting: false,
+        lastExportPath: path,
+        statusMessage: `Saved ${seconds.toFixed(1)}s track`,
+      });
       return path;
     } catch (err) {
       set({
+        exporting: false,
         statusMessage: `Export failed: ${err instanceof Error ? err.message : String(err)}`,
       });
       return null;
+    }
+  },
+
+  shareTrack: async () => {
+    // Reuse the last render when nothing has changed; re-rendering a 4-bar
+    // mixdown is fast but not free, and the user pressed Share, not Save.
+    const path = get().lastExportPath ?? (await get().exportTrack());
+    if (!path) return;
+
+    try {
+      if (!(await Sharing.isAvailableAsync())) {
+        set({ statusMessage: `Saved to ${path.split('/').pop()}` });
+        return;
+      }
+      await Sharing.shareAsync(path, {
+        mimeType: 'audio/wav',
+        dialogTitle: 'Share your WorldJam track',
+      });
+    } catch (err) {
+      set({
+        statusMessage: `Share failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
     }
   },
 

@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Pressable,
@@ -10,18 +10,33 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CaptureButton } from '@/components/CaptureButton';
 import { LatencyBadge } from '@/components/LatencyBadge';
-import { MixerPanel } from '@/components/MixerPanel';
+import { LayerList } from '@/components/LayerList';
 import { QuantizePanel } from '@/components/QuantizePanel';
 import { RhythmGuide } from '@/components/RhythmGuide';
 import { SoundObjectCard } from '@/components/SoundObjectCard';
-import { StyleStrip } from '@/components/StyleStrip';
+import { TrackPlayer } from '@/components/TrackPlayer';
 import { TransportBar } from '@/components/TransportBar';
+import { VibeGrid } from '@/components/VibeGrid';
+import { Waveform } from '@/components/Waveform';
+import {
+  describeStatus,
+  getModelStatus,
+  subscribeModelStatus,
+  type ModelStatus,
+} from '@/ai/modelLoader';
 import { useSession } from '@/state/sessionStore';
 import { colors, radius, spacing, type } from '@/theme';
 
+/**
+ * The jam surface — panels 4 through 8 of the product mockups, in the order
+ * the demo walks them: voice, guide, arrange, layers, vibes, player.
+ */
 export function JamScreen({ onBack }: { onBack: () => void }) {
   const insets = useSafeAreaInsets();
   const [showQuantize, setShowQuantize] = useState(false);
+  const [modelStatus, setModelStatus] = useState<ModelStatus>(getModelStatus());
+
+  useEffect(() => subscribeModelStatus(setModelStatus), []);
 
   const s = useSession();
 
@@ -30,6 +45,13 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
   const handleVocalStart = useCallback(() => {
     s.beginCapture({ kind: 'vocal' });
   }, [s]);
+
+  const modelTone =
+    modelStatus.state === 'ready'
+      ? colors.live
+      : modelStatus.state === 'error'
+        ? colors.warn
+        : colors.textFaint;
 
   return (
     <View style={styles.root}>
@@ -41,9 +63,10 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
       </View>
 
       <ScrollView
-        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 140 }]}
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 150 }]}
         showsVerticalScrollIndicator={false}
       >
+        {/* --- pads (panel 3) --- */}
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -53,21 +76,57 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
             <SoundObjectCard
               key={o.id}
               object={o}
-              beatPulse={0}
+              pcm={s.pcmBySlot.get(o.slot) ?? null}
               onTrigger={s.playObject}
               onLongPress={s.removeObject}
             />
           ))}
         </ScrollView>
 
-        <View style={styles.section}>
+        {/* --- voice (panel 4) --- */}
+        <View style={styles.sectionPad}>
+          <View style={styles.vocalRow}>
+            <CaptureButton
+              recording={s.recording?.kind === 'vocal'}
+              label={s.vocalTake ? 'Re-sing' : 'Sing or hum'}
+              hint="hold and sing"
+              tint={colors.ai}
+              onStart={handleVocalStart}
+              onStop={s.finishCapture}
+            />
+
+            <View style={styles.vocalInfo}>
+              {s.vocalTake ? (
+                <>
+                  <Text style={styles.vocalTitle}>Voice captured</Text>
+                  <Waveform
+                    pcm={s.pcmBySlot.get(s.vocalTake.slot) ?? null}
+                    width={150}
+                    height={26}
+                    color={colors.ai}
+                    bars={42}
+                  />
+                  <Text style={styles.vocalMeta}>
+                    {s.vocalTake.duration.toFixed(1)}s · {s.vocalTake.notes.length} notes
+                    {s.vocalTake.detectedKey ? ` · ${s.vocalTake.detectedKey}` : ''}
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.vocalMeta}>
+                  Hum any phrase. Your voice stays the lead layer and sets the key for the
+                  accompaniment.
+                </Text>
+              )}
+            </View>
+          </View>
+        </View>
+
+        {/* --- rhythm guide (panel 5) --- */}
+        <View style={styles.sectionPad}>
           <RhythmGuide plan={s.plan} objects={s.objects} playing={s.playing} />
         </View>
 
-        <View style={styles.section}>
-          <StyleStrip active={s.style} disabled={s.arranging} onSelect={s.applyStyle} />
-        </View>
-
+        {/* --- arrange (panel 6 trigger) --- */}
         <View style={styles.sectionPad}>
           <Pressable
             onPress={() => s.arrange()}
@@ -81,62 +140,45 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
             {s.arranging ? (
               <ActivityIndicator color={colors.bg} />
             ) : (
-              <Text style={styles.arrangeText}>Arrange with Gemma</Text>
+              <Text style={styles.arrangeText}>Turn it into music</Text>
             )}
           </Pressable>
+
+          <View style={styles.modelRow}>
+            <View style={[styles.modelDot, { backgroundColor: modelTone }]} />
+            <Text style={styles.modelText} numberOfLines={2}>
+              {describeStatus(modelStatus)}
+            </Text>
+          </View>
 
           {s.lastPlanInfo && <Text style={styles.planInfo}>{s.lastPlanInfo}</Text>}
         </View>
 
-        <View style={styles.sectionPad}>
-          <Pressable
-            onPress={() => s.exportTrack()}
-            disabled={s.loops.length === 0}
-            accessibilityRole="button"
-            accessibilityLabel="Export the session as a WAV file"
-            style={[styles.export, s.loops.length === 0 && styles.exportDisabled]}
-          >
-            <Text
-              style={[styles.exportText, s.loops.length === 0 && styles.exportTextDisabled]}
-            >
-              Export track
-            </Text>
-          </Pressable>
-        </View>
-
-        <View style={styles.sectionPad}>
-          <View style={styles.vocalRow}>
-            <CaptureButton
-              recording={s.recording?.kind === 'vocal'}
-              label={s.vocalTake ? 'Re-sing' : 'Hum a melody'}
-              hint="hold and sing"
-              tint={colors.ai}
-              onStart={handleVocalStart}
-              onStop={s.finishCapture}
+        {/* --- layers (panel 6) --- */}
+        {s.objects.length > 0 && (
+          <View style={styles.sectionPad}>
+            <LayerList
+              objects={s.objects}
+              pcmBySlot={s.pcmBySlot}
+              vocalTake={s.vocalTake}
+              accompaniment={s.plan?.accompaniment ?? []}
+              onToggleObject={(id) => {
+                const o = s.objects.find((x) => x.id === id);
+                if (o) s.setObjectVolume(id, o.volume === 0 ? 1 : 0);
+              }}
+              onTriggerObject={s.playObject}
             />
+          </View>
+        )}
 
-            <View style={styles.vocalInfo}>
-              {s.vocalTake ? (
-                <>
-                  <Text style={styles.vocalTitle}>Voice captured</Text>
-                  <Text style={styles.vocalMeta}>
-                    {s.vocalTake.duration.toFixed(1)}s · {s.vocalTake.notes.length} notes
-                    {s.vocalTake.detectedKey ? ` · ${s.vocalTake.detectedKey}` : ''}
-                  </Text>
-                  <Text style={styles.vocalNote}>
-                    Your raw voice is preserved — the AI only reads its timing and pitch.
-                  </Text>
-                </>
-              ) : (
-                <Text style={styles.vocalMeta}>
-                  Hum any phrase. It becomes the lead layer and sets the key for the
-                  accompaniment.
-                </Text>
-              )}
-            </View>
+        {/* --- vibes (panel 7) --- */}
+        <View style={styles.sectionPad}>
+          <View style={styles.vibeCard}>
+            <VibeGrid active={s.style} busy={s.arranging} onSelect={s.applyStyle} />
           </View>
         </View>
 
+        {/* --- timing --- */}
         <View style={styles.sectionPad}>
           <Pressable
             onPress={() => setShowQuantize((v) => !v)}
@@ -167,31 +209,20 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
           )}
         </View>
 
-        {s.objects.length > 0 && (
-          <View style={styles.sectionPad}>
-            <MixerPanel
-              objects={s.objects}
-              onVolumeChange={s.setObjectVolume}
-              onRemove={s.removeObject}
-            />
-          </View>
-        )}
-
+        {/* --- player (panel 8) --- */}
         {s.loops.length > 0 && (
           <View style={styles.sectionPad}>
-            <Text style={styles.sectionHeader}>LAYERS</Text>
-            {s.loops.map((l) => (
-              <Pressable
-                key={l.id}
-                onPress={() => s.toggleLoopMute(l.id)}
-                accessibilityRole="button"
-                style={styles.layerRow}
-              >
-                <View style={[styles.layerDot, !l.muted && styles.layerDotOn]} />
-                <Text style={[styles.layerName, l.muted && styles.layerMuted]}>{l.name}</Text>
-                <Text style={styles.layerCount}>{l.events.length} hits</Text>
-              </Pressable>
-            ))}
+            <TrackPlayer
+              title="My Room Track"
+              playing={s.playing}
+              bpm={s.bpm}
+              bars={s.bars}
+              previewPcm={null}
+              exporting={s.exporting}
+              onTogglePlay={s.togglePlay}
+              onSave={() => s.exportTrack()}
+              onShare={() => s.shareTrack()}
+            />
           </View>
         )}
       </ScrollView>
@@ -224,35 +255,28 @@ const styles = StyleSheet.create({
   backText: { ...type.label, color: colors.textDim },
   scroll: { gap: spacing.lg },
   cards: { gap: spacing.md, paddingHorizontal: spacing.lg },
-  section: { paddingHorizontal: 0 },
   sectionPad: { paddingHorizontal: spacing.lg },
-  sectionHeader: { ...type.caption, color: colors.textFaint, marginBottom: spacing.sm },
+
   arrange: {
     paddingVertical: spacing.lg,
     borderRadius: radius.md,
-    backgroundColor: colors.ai,
+    backgroundColor: colors.vibe,
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 52,
   },
   arrangeDisabled: { backgroundColor: colors.surfaceRaised },
-  export: {
-    paddingVertical: spacing.md,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    alignItems: 'center',
-  },
-  exportDisabled: { borderColor: colors.border },
-  exportText: { ...type.label, color: colors.text },
-  exportTextDisabled: { color: colors.textFaint },
   arrangeText: { ...type.label, color: colors.bg },
-  planInfo: {
-    ...type.caption,
-    color: colors.textFaint,
+  modelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
     marginTop: spacing.sm,
-    textAlign: 'center',
   },
+  modelDot: { width: 6, height: 6, borderRadius: 3 },
+  modelText: { ...type.caption, color: colors.textFaint, flex: 1 },
+  planInfo: { ...type.caption, color: colors.textFaint, marginTop: 2 },
+
   vocalRow: {
     flexDirection: 'row',
     gap: spacing.lg,
@@ -266,7 +290,15 @@ const styles = StyleSheet.create({
   vocalInfo: { flex: 1, gap: 4 },
   vocalTitle: { ...type.label, color: colors.text },
   vocalMeta: { ...type.caption, color: colors.textDim, fontWeight: '500' },
-  vocalNote: { ...type.caption, color: colors.textFaint, fontWeight: '500' },
+
+  vibeCard: {
+    padding: spacing.lg,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+  },
+
   disclosure: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -275,19 +307,7 @@ const styles = StyleSheet.create({
   },
   disclosureText: { ...type.label, color: colors.textDim },
   disclosureBadge: { ...type.label, color: colors.live, fontVariant: ['tabular-nums'] },
-  layerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.md,
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  layerDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.border },
-  layerDotOn: { backgroundColor: colors.live },
-  layerName: { ...type.body, color: colors.text, flex: 1 },
-  layerMuted: { color: colors.textFaint },
-  layerCount: { ...type.caption, color: colors.textFaint },
+
   transportWrap: {
     position: 'absolute',
     left: 0,

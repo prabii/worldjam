@@ -145,7 +145,7 @@ describe('validatePlan', () => {
 
   it('defaults an unknown style to natural', () => {
     const { plan } = validatePlan({ ...good, style: 'polka' }, OBJECTS, 92);
-    expect(plan!.style).toBe('natural');
+    expect(plan!.style).toBe('chill');
   });
 
   it('returns null when nothing playable survives', () => {
@@ -169,7 +169,7 @@ describe('validatePlan', () => {
 
 describe('buildFallbackPlan', () => {
   it('produces a playable plan for every object with a role pattern', () => {
-    const plan = buildFallbackPlan(OBJECTS, 'natural');
+    const plan = buildFallbackPlan(OBJECTS, 'chill');
     expect(plan.objectPattern.length).toBeGreaterThan(0);
     expect(plan.source).toBe('fallback');
     expect(plan.bpm).toBeGreaterThanOrEqual(60);
@@ -181,14 +181,14 @@ describe('buildFallbackPlan', () => {
   });
 
   it('gives different styles different feels', () => {
-    const natural = buildFallbackPlan(OBJECTS, 'natural');
+    const natural = buildFallbackPlan(OBJECTS, 'chill');
     const jazz = buildFallbackPlan(OBJECTS, 'jazz');
     expect(jazz.bpm).not.toBe(natural.bpm);
   });
 
   it('offsets two objects sharing a role so they do not play in unison', () => {
     const twins = [obj('Cup A', 'hat'), obj('Cup B', 'hat')];
-    const plan = buildFallbackPlan(twins, 'natural');
+    const plan = buildFallbackPlan(twins, 'chill');
     const [a, b] = plan.objectPattern;
     expect(a.beats).not.toEqual(b.beats);
   });
@@ -204,21 +204,21 @@ describe('buildFallbackPlan', () => {
   });
 
   it('honours a tempo hint when it is musical', () => {
-    expect(buildFallbackPlan(OBJECTS, 'natural', 104).bpm).toBe(104);
+    expect(buildFallbackPlan(OBJECTS, 'chill', 104).bpm).toBe(104);
   });
 
   it('ignores an absurd tempo hint', () => {
-    expect(buildFallbackPlan(OBJECTS, 'natural', 900).bpm).toBeLessThanOrEqual(180);
+    expect(buildFallbackPlan(OBJECTS, 'chill', 900).bpm).toBeLessThanOrEqual(180);
   });
 
   it('copes with no objects at all', () => {
-    expect(buildFallbackPlan([], 'natural').objectPattern).toEqual([]);
+    expect(buildFallbackPlan([], 'chill').objectPattern).toEqual([]);
   });
 });
 
 describe('restylePlan', () => {
   it('changes the feel while keeping the same objects', () => {
-    const base = buildFallbackPlan(OBJECTS, 'natural');
+    const base = buildFallbackPlan(OBJECTS, 'chill');
     const jazzed = restylePlan(base, OBJECTS, 'jazz');
 
     expect(jazzed.style).toBe('jazz');
@@ -235,9 +235,11 @@ describe('parseStyleCommand', () => {
     ['make it jazz', 'jazz'],
     ['can you make this more lo-fi', 'lofi'],
     ['give it a cinematic feel', 'cinematic'],
-    ['more techno please', 'electronic'],
+    ['more techno please', 'edm'],
+    ['give me edm', 'edm'],
     ['turn it into rock', 'rock'],
-    ['back to natural', 'natural'],
+    ['back to chill', 'chill'],
+    ['make it natural again', 'chill'],
   ])('maps "%s" to %s', (input, expected) => {
     expect(parseStyleCommand(input)).toBe(expected);
   });
@@ -262,7 +264,7 @@ describe('buildPrompt', () => {
 
   it('includes a user instruction when given', () => {
     const prompt = buildPrompt(
-      { objects: OBJECTS, vocal: null, bpmHint: null, style: 'natural' },
+      { objects: OBJECTS, vocal: null, bpmHint: null, style: 'chill' },
       'make it jazz',
     );
     expect(prompt).toContain('make it jazz');
@@ -276,7 +278,7 @@ describe('generatePlan', () => {
     objects: OBJECTS,
     vocal: null,
     bpmHint: 92,
-    style: 'natural' as const,
+    style: 'chill' as const,
   };
 
   it('falls back when no runtime is registered', async () => {
