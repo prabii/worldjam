@@ -52,6 +52,13 @@ import {
 import { generatePlan, parseStyleCommand } from '@/ai/gemma';
 import { buildFallbackPlan, restylePlan } from '@/ai/fallbackArranger';
 import { generateLyrics, type LyricSet } from '@/ai/lyrics';
+import {
+  deleteSession,
+  listSessions,
+  loadSession,
+  saveSession,
+  type SessionSummary,
+} from './sessionStorage';
 
 import { colors as themeColors } from '@/theme';
 
@@ -122,6 +129,13 @@ interface SessionState {
   clearLiveLoop: () => void;
   /** Clears the arrangement and lyrics, keeping the captured sounds. */
   clearTrack: () => void;
+  /** Saved jams, newest first. */
+  savedSessions: SessionSummary[];
+  savingSession: boolean;
+  refreshSessions: () => Promise<void>;
+  saveCurrentSession: (name: string) => Promise<void>;
+  openSession: (id: string) => Promise<void>;
+  removeSession: (id: string) => Promise<void>;
   setStatus: (msg: string | null) => void;
   writeLyrics: (mood?: string) => Promise<void>;
   /** Spoken guidance for accessibility and hands-free coaching. */
@@ -170,11 +184,110 @@ export const useSession = create<SessionState>((set, get) => ({
   exporting: false,
   lastExportPath: null,
   guidanceOn: false,
+  savedSessions: [],
+  savingSession: false,
 
   armed: false,
   liveEvents: [],
 
   setStatus: (msg) => set({ statusMessage: msg }),
+
+  refreshSessions: async () => {
+    set({ savedSessions: await listSessions() });
+  },
+
+  saveCurrentSession: async (name) => {
+    const state = get();
+    if (state.objects.length === 0) {
+      set({ statusMessage: 'Record something first.' });
+      return;
+    }
+    if (state.savingSession) return;
+
+    set({ savingSession: true, statusMessage: 'Saving jam…' });
+
+    try {
+      await saveSession({
+        name: name.trim() || `Jam ${new Date().toLocaleDateString()}`,
+        objects: state.objects,
+        pcmBySlot: state.pcmBySlot,
+        loops: state.loops,
+        plan: state.plan,
+        lyrics: state.lyrics,
+        style: state.style,
+        bpm: state.bpm,
+        bars: state.bars,
+        key: state.key,
+      });
+
+      set({
+        savingSession: false,
+        savedSessions: await listSessions(),
+        statusMessage: `Saved "${name}"`,
+      });
+      if (isGuidanceEnabled()) speakNow(`Jam saved as ${name}`);
+    } catch (err) {
+      set({
+        savingSession: false,
+        statusMessage: `Save failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    }
+  },
+
+  openSession: async (id) => {
+    set({ statusMessage: 'Loading jam…' });
+
+    const loaded = await loadSession(id);
+    if (!loaded) {
+      set({ statusMessage: 'Could not open that jam.' });
+      return;
+    }
+
+    const { session, pcmBySlot } = loaded;
+
+    // Stop everything before swapping the engine's samples underneath it.
+    transport.stop();
+    stopAllVoices();
+    for (const o of get().objects) clearSlot(o.slot);
+
+    // Push the audio back into the native engine.
+    for (const [slot, pcm] of pcmBySlot) {
+      loadSample(slot, pcm, 1);
+    }
+
+    transport.setResolver((objectId) => {
+      const obj = get().objects.find((o) => o.id === objectId);
+      return obj ? { slot: obj.slot, gain: obj.volume, pan: obj.pan } : null;
+    });
+    transport.setTempo(session.bpm, session.bars);
+    transport.setLoops(session.loops);
+
+    set({
+      objects: session.objects,
+      pcmBySlot,
+      loops: session.loops,
+      plan: session.plan,
+      lyrics: session.lyrics,
+      style: session.style,
+      bpm: session.bpm,
+      bars: session.bars,
+      key: session.key,
+      playing: false,
+      armed: false,
+      liveEvents: [],
+      lastExportPath: null,
+      statusMessage: `Opened "${session.name}"`,
+    });
+
+    if (isGuidanceEnabled()) {
+      speakNow(`Opened ${session.name}, ${session.objectCount} sounds.`);
+    }
+  },
+
+  removeSession: async (id) => {
+    await deleteSession(id);
+    set({ savedSessions: await listSessions(), statusMessage: 'Jam deleted' });
+  },
 
   writeLyrics: async (mood) => {
     const state = get();

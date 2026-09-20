@@ -4,19 +4,23 @@ import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useKeepAwake } from 'expo-keep-awake';
 import { WelcomeScreen } from '@/screens/WelcomeScreen';
+import { HomeScreen } from '@/screens/HomeScreen';
 import { CaptureScreen } from '@/screens/CaptureScreen';
+import { BottomNav, type NavTab } from '@/components/ui/BottomNav';
+import { useSession } from '@/state/sessionStore';
 import { JamScreen } from '@/screens/JamScreen';
 import { nativeAvailable, startEngine, stopEngine } from '@/audio/engine';
 import { initModel, releaseModel } from '@/ai/modelLoader';
 import { colors, spacing, type } from '@/theme';
 
-type Screen = 'welcome' | 'capture' | 'jam';
+type Screen = 'welcome' | 'home' | 'capture' | 'jam';
 
 export default function App() {
   // A demo dies if the screen sleeps mid-jam.
   useKeepAwake();
 
   const [screen, setScreen] = useState<Screen>('welcome');
+  const openSession = useSession((s) => s.openSession);
   const [engineError, setEngineError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -80,13 +84,33 @@ export default function App() {
       <View style={styles.root}>
         {screen === 'welcome' ? (
           <WelcomeScreen
-            onStart={() => setScreen('capture')}
-            onHowItWorks={() => setScreen('capture')}
+            onStart={() => setScreen('home')}
+            onHowItWorks={() => setScreen('home')}
+          />
+        ) : screen === 'home' ? (
+          <HomeScreen
+            onScan={() => setScreen('capture')}
+            onCompose={() => setScreen('jam')}
+            onOpenSession={async (id) => {
+              await openSession(id);
+              setScreen('jam');
+            }}
           />
         ) : screen === 'capture' ? (
           <CaptureScreen onDone={() => setScreen('jam')} />
         ) : (
-          <JamScreen onBack={() => setScreen('capture')} />
+          <JamScreen onBack={() => setScreen('home')} />
+        )}
+
+        {/* Nav is hidden on the welcome screen, which is a full-bleed
+            standalone moment rather than part of the tabbed app. */}
+        {screen !== 'welcome' && screen !== 'capture' && (
+          <BottomNav
+            active={screen === 'home' ? 'home' : 'studio'}
+            onSelect={(t) => setScreen(t === 'home' ? 'home' : 'jam')}
+            onCapture={() => setScreen('capture')}
+            disabled={['jams', 'profile']}
+          />
         )}
 
         {engineError && (

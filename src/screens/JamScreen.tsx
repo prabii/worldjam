@@ -1,10 +1,12 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -36,6 +38,8 @@ import { colors, radius, spacing, type } from '@/theme';
 export function JamScreen({ onBack }: { onBack: () => void }) {
   const insets = useSafeAreaInsets();
   const [showQuantize, setShowQuantize] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveName, setSaveName] = useState('');
   const [modelStatus, setModelStatus] = useState<ModelStatus>(getModelStatus());
 
   useEffect(() => subscribeModelStatus(setModelStatus), []);
@@ -243,6 +247,26 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
           )}
         </View>
 
+        {/* --- save this jam --- */}
+        {s.objects.length > 0 && (
+          <View style={styles.sectionPad}>
+            <Pressable
+              onPress={() => {
+                setSaveName(`Jam ${new Date().toLocaleDateString()}`);
+                setSaving(true);
+              }}
+              disabled={s.savingSession}
+              accessibilityRole="button"
+              accessibilityLabel="Save this jam"
+              style={styles.saveButton}
+            >
+              <Text style={styles.saveButtonText}>
+                {s.savingSession ? 'Saving…' : '♥ Save this jam'}
+              </Text>
+            </Pressable>
+          </View>
+        )}
+
         {/* --- player (panel 8) --- */}
         {s.loops.length > 0 && (
           <View style={styles.sectionPad}>
@@ -261,6 +285,42 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
           </View>
         )}
       </ScrollView>
+
+      <Modal visible={saving} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Name this jam</Text>
+            <TextInput
+              value={saveName}
+              onChangeText={setSaveName}
+              placeholder="Morning Vibes"
+              placeholderTextColor={colors.textFaint}
+              style={styles.modalInput}
+              maxLength={28}
+              autoFocus
+              onSubmitEditing={() => {
+                void s.saveCurrentSession(saveName);
+                setSaving(false);
+              }}
+              accessibilityLabel="Jam name"
+            />
+            <View style={styles.modalButtons}>
+              <Pressable onPress={() => setSaving(false)} style={styles.modalCancel}>
+                <Text style={styles.modalCancelText}>Cancel</Text>
+              </Pressable>
+              <Pressable
+                onPress={() => {
+                  void s.saveCurrentSession(saveName);
+                  setSaving(false);
+                }}
+                style={styles.modalSave}
+              >
+                <Text style={styles.modalSaveText}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <View style={[styles.transportWrap, { paddingBottom: insets.bottom + spacing.md }]}>
         {s.statusMessage && <Text style={styles.status}>{s.statusMessage}</Text>}
@@ -368,4 +428,60 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
   },
   status: { ...type.caption, color: colors.textDim, textAlign: 'center' },
+
+  saveButton: {
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.accent,
+    backgroundColor: colors.accentDim,
+    alignItems: 'center',
+  },
+  saveButtonText: { ...type.label, color: colors.accent },
+
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  modalCard: {
+    width: '100%',
+    padding: spacing.xl,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSolid,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.md,
+  },
+  modalTitle: { ...type.title, color: colors.text },
+  modalInput: {
+    ...type.body,
+    color: colors.text,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.bg,
+  },
+  modalButtons: { flexDirection: 'row', gap: spacing.md },
+  modalCancel: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  modalCancelText: { ...type.label, color: colors.textDim },
+  modalSave: {
+    flex: 2,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    borderRadius: radius.md,
+    backgroundColor: colors.vibe,
+  },
+  modalSaveText: { ...type.label, color: colors.bg },
 });
