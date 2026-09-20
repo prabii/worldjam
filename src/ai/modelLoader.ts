@@ -48,10 +48,20 @@ function fileSizeMb(info: FileSystem.FileInfo): number {
   return info.exists && !info.isDirectory ? Math.round((info.size ?? 0) / 1e6) : 0;
 }
 
-/** Recognised model filenames, most preferred first. */
+/**
+ * Recognised model filenames, most preferred first.
+ *
+ * Distributors name these inconsistently — the separator before the quant and
+ * the position of "-it" both vary — so the list covers the spellings seen in
+ * the wild. A directory scan (below) catches anything else, but only where
+ * the directory is listable, which scoped storage does not guarantee.
+ */
 const CANDIDATE_NAMES = [
+  'gemma-4-E2B_q4_0-it.gguf',
   'gemma-4-E2B-it-qat-q4_0.gguf',
+  'gemma-4-E2B-it-q4_0.gguf',
   'gemma-4-e2b-it-q4_0.gguf',
+  'gemma-4-E2B_q4_0.gguf',
   'gemma-3n-E2B-it-q4_0.gguf',
   'gemma-3-1b-it-q4_0.gguf',
 ];
@@ -80,7 +90,10 @@ export async function findModel(): Promise<{ path: string; sizeMb: number } | nu
 
     try {
       const entries = await FileSystem.readDirectoryAsync(`file://${dir}`);
-      const gguf = entries.find((e) => e.toLowerCase().endsWith('.gguf'));
+      // Prefer a Gemma file when several are present.
+      const ggufs = entries.filter((e) => e.toLowerCase().endsWith('.gguf'));
+      const gguf =
+        ggufs.find((e) => e.toLowerCase().includes('gemma')) ?? ggufs[0];
       if (gguf) {
         const info = await FileSystem.getInfoAsync(`file://${dir}${gguf}`);
         return { path: `${dir}${gguf}`, sizeMb: fileSizeMb(info) };

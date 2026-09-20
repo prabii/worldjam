@@ -25,3 +25,8 @@ ios/Pods/
 # Native module build output
 modules/*/android/build/
 modules/*/android/.cxx/
+
+# Model weights are never committed (3+ GB, and the Gemma license
+# governs redistribution). Keep them on the device or beside the repo.
+*.gguf
+*.task

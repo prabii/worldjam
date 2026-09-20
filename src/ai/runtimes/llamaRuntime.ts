@@ -41,7 +41,12 @@ export interface LlamaRuntimeHandle extends GemmaRuntime {
 }
 
 const DEFAULTS = {
-  contextSize: 2048,
+  /**
+   * The arrangement prompt is a compact session summary and the reply is one
+   * small JSON object. 1024 is ample, and on a 4.6B model every extra token of
+   * context costs real KV-cache memory on a phone.
+   */
+  contextSize: 1024,
   gpuLayers: 0,
   threads: 4,
 };
@@ -108,9 +113,9 @@ export function createLlamaRuntime(opts: LlamaOptions): LlamaRuntimeHandle {
         temperature: 0.1,
         top_k: 20,
         top_p: 0.9,
-        // Gemma's turn terminator, plus a newline-brace guard in case the
-        // model tries to emit a second object after the first.
-        stop: ['<end_of_turn>', '\n\n\n', '}\n{'],
+        // Gemma 4's turn terminators, plus a guard in case the model tries to
+        // emit a second object after the first.
+        stop: [...GEMMA4_STOPS, '\n\n\n', '}\n{'],
         penalty_repeat: 1.0,
       });
 
@@ -129,15 +134,27 @@ export function createLlamaRuntime(opts: LlamaOptions): LlamaRuntimeHandle {
 }
 
 /**
- * Wraps the arrangement prompt in Gemma's instruction-tuned chat template.
+ * Wraps the arrangement prompt in Gemma 4's chat template.
  *
- * An -it model trained on this template produces noticeably more compliant
- * output when it is used, and noticeably worse when it is not — the raw prompt
- * reads as a continuation task rather than an instruction.
+ * Gemma 4 does NOT use the `<start_of_turn>` markers of Gemma 2/3. Its
+ * canonical template (read directly from the GGUF's metadata) is:
+ *
+ *     <|turn>user\n ... <turn|>\n<|turn>model\n
+ *
+ * Using the older markers produces a prompt the model was never trained on,
+ * and the output degrades badly without any obvious error — so this is
+ * verified against the file rather than assumed.
+ *
+ * Thinking mode is deliberately not opened: `<|channel>thought` would make the
+ * model reason at length before answering, and this task needs one small JSON
+ * object inside a 4-second budget.
  */
 export function formatGemmaPrompt(prompt: string): string {
-  return `<start_of_turn>user\n${prompt}<end_of_turn>\n<start_of_turn>model\n`;
+  return `<|turn>user\n${prompt}<turn|>\n<|turn>model\n`;
 }
+
+/** Turn terminators for Gemma 4, used as stop sequences. */
+export const GEMMA4_STOPS = ['<turn|>', '<|turn>', '<|channel>', '<eos>'];
 
 /**
  * Common locations a GGUF may sit on an Android device.
