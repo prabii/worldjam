@@ -3,19 +3,20 @@ import { PermissionsAndroid, Platform, StyleSheet, Text, View } from 'react-nati
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useKeepAwake } from 'expo-keep-awake';
+import { WelcomeScreen } from '@/screens/WelcomeScreen';
 import { CaptureScreen } from '@/screens/CaptureScreen';
 import { JamScreen } from '@/screens/JamScreen';
 import { nativeAvailable, startEngine, stopEngine } from '@/audio/engine';
 import { initModel, releaseModel } from '@/ai/modelLoader';
 import { colors, spacing, type } from '@/theme';
 
-type Screen = 'capture' | 'jam';
+type Screen = 'welcome' | 'capture' | 'jam';
 
 export default function App() {
   // A demo dies if the screen sleeps mid-jam.
   useKeepAwake();
 
-  const [screen, setScreen] = useState<Screen>('capture');
+  const [screen, setScreen] = useState<Screen>('welcome');
   const [engineError, setEngineError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -77,7 +78,12 @@ export default function App() {
     <SafeAreaProvider>
       <StatusBar style="light" />
       <View style={styles.root}>
-        {screen === 'capture' ? (
+        {screen === 'welcome' ? (
+          <WelcomeScreen
+            onStart={() => setScreen('capture')}
+            onHowItWorks={() => setScreen('capture')}
+          />
+        ) : screen === 'capture' ? (
           <CaptureScreen onDone={() => setScreen('jam')} />
         ) : (
           <JamScreen onBack={() => setScreen('capture')} />

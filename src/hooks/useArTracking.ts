@@ -5,6 +5,17 @@ import { parsePose, parseProjections, type ProjectedAnchor, type Pose } from '@/
 /**
  * Drives the ARCore session and polls anchor positions each frame.
  *
+ * DISABLED BY DEFAULT. ARCore's C API requires a GL context with a camera
+ * texture bound before Session.update() is called; this hook drives update()
+ * from a JS timer with neither, and ARCore segfaults inside libarcore_c.so
+ * (SIGSEGV in its tango_pool thread) rather than returning an error. That
+ * crash takes the whole app down about two seconds after launch.
+ *
+ * Doing this properly needs a GLSurfaceView rendering the camera feed and
+ * driving update() from its render thread - a real piece of work, and exactly
+ * the Tier 3 risk HLD v2 S2 warns about. Until then the app uses the 2D
+ * placement path, which costs nothing and cannot crash.
+ *
  * The polling rate is deliberately below display rate: anchor positions feed
  * label placement and audio panning, and at 20 Hz neither reads as laggy while
  * the bridge cost stays modest. Pushing this to 60 Hz measurably competes with
@@ -16,6 +27,12 @@ import { parsePose, parseProjections, type ProjectedAnchor, type Pose } from '@/
  */
 
 const POLL_HZ = 20;
+
+/**
+ * Master switch. Turning this on without first adding a GL render thread
+ * will crash the app on launch - see the note above.
+ */
+const AR_ENABLED = false;
 
 export interface ArState {
   /** ARCore exists and a session was created. */
@@ -47,7 +64,13 @@ export function useArTracking(
 
   // --- session lifecycle ---
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled || !AR_ENABLED) {
+      setSupported(false);
+      setError(
+        AR_ENABLED ? null : 'AR needs a GL render thread; using 2D placement',
+      );
+      return;
+    }
 
     const ok = WorldJamAudio.arSupported();
     setSupported(ok);
