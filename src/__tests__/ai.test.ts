@@ -336,7 +336,8 @@ describe('generatePlan', () => {
       // Longer than PLAN_TIMEOUT_MS; the timeout must win.
       generate: () =>
         new Promise((resolve) => {
-          hang = setTimeout(() => resolve('{}'), 30_000);
+          // Longer than PLAN_TIMEOUT_MS (25 s) so the timeout must win.
+          hang = setTimeout(() => resolve('{}'), 60_000);
         }),
     });
 
@@ -346,10 +347,12 @@ describe('generatePlan', () => {
 
     expect(result.usedFallback).toBe(true);
     expect(result.error).toContain('timed out');
-    expect(elapsed).toBeLessThan(10_000);
+    // The point is that it returns rather than hanging forever, not that it
+    // is fast: a phone-CPU model legitimately needs tens of seconds.
+    expect(elapsed).toBeLessThan(30_000);
 
     if (hang) clearTimeout(hang);
-  }, 15_000);
+  }, 40_000);
 
   it('falls back when there are no objects yet', async () => {
     const result = await generatePlan({ ...snapshot, objects: [] });

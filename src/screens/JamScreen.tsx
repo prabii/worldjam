@@ -256,6 +256,7 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
               onTogglePlay={s.togglePlay}
               onSave={() => s.exportTrack()}
               onShare={() => s.shareTrack()}
+              onDelete={s.clearTrack}
             />
           </View>
         )}

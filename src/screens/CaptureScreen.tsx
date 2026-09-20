@@ -93,9 +93,17 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
   const handleRecordStart = useCallback(() => {
     // Auto-position when nothing was tapped, so recording never blocks on a
     // placement step the user did not know about.
+    //
+    // The golden-angle spiral spreads successive captures evenly instead of
+    // clustering them. An earlier version reused nextSpot.current without
+    // clearing it, so every auto-placed object landed on the same point and
+    // the labels stacked.
+    const n = objects.length;
+    const golden = 2.399963; // radians
+    const radius = 0.13 + 0.055 * Math.sqrt(n);
     const spot = nextSpot.current ?? {
-      x: 0.2 + ((objects.length * 0.27) % 0.6),
-      y: 0.3 + ((objects.length * 0.17) % 0.4),
+      x: 0.5 + Math.cos(n * golden) * radius,
+      y: 0.42 + Math.sin(n * golden) * radius * 0.8,
     };
     nextSpot.current = spot;
 
@@ -221,7 +229,11 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
             ]}
           />
           <Text style={styles.badgeText}>
-            {ar.tracking ? 'AR locked' : ar.supported ? 'Move to scan' : '2D mode'}
+            {ar.tracking
+              ? 'AR locked'
+              : ar.supported
+                ? 'Move to scan'
+                : 'Tap-to-place'}
           </Text>
         </View>
 

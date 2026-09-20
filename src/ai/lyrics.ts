@@ -219,8 +219,12 @@ export interface LyricResult {
   error?: string;
 }
 
-/** Lyrics are less urgent than arrangement, so they get a longer budget. */
-const LYRIC_TIMEOUT_MS = 12000;
+/**
+ * Lyrics are less urgent than arrangement, so they get a longer budget.
+ * Measured: a 4.6B model on this phone's CPU needs tens of seconds even for
+ * four short lines.
+ */
+const LYRIC_TIMEOUT_MS = 40000;
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
   return Promise.race([

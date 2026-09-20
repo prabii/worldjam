@@ -21,6 +21,7 @@ import {
   sampleRate,
   setMetronome,
   startRecording,
+  stopAllVoices,
   stopRecording,
   trigger,
 } from '@/audio/engine';
@@ -119,6 +120,8 @@ interface SessionState {
   setQuantize: (opts: Partial<QuantizeOptions>) => void;
   toggleLoopMute: (id: string) => void;
   clearLiveLoop: () => void;
+  /** Clears the arrangement and lyrics, keeping the captured sounds. */
+  clearTrack: () => void;
   setStatus: (msg: string | null) => void;
   writeLyrics: (mood?: string) => Promise<void>;
   /** Spoken guidance for accessibility and hands-free coaching. */
@@ -386,7 +389,19 @@ export const useSession = create<SessionState>((set, get) => ({
       return;
     }
 
-    set({ arranging: true, statusMessage: 'Arranging…' });
+    set({ arranging: true, statusMessage: 'Gemma is arranging…' });
+
+    // A model call can take 20 s on a phone CPU. Without a ticking counter a
+    // static message reads as a hang.
+    // tickStart must be declared BEFORE the interval: a `const` referenced
+    // from a callback that fires before the declaration throws on the
+    // temporal dead zone.
+    const tickStart = Date.now();
+    const tick = setInterval(() => {
+      if (!get().arranging) return;
+      const secs = ((Date.now() - tickStart) / 1000).toFixed(0);
+      set({ statusMessage: `Gemma is arranging… ${secs}s` });
+    }, 1000);
 
     // Tempo hint from whatever the user has actually played so far.
     const bpmHint = state.liveEvents.length >= 3 ? state.bpm : null;
@@ -402,6 +417,7 @@ export const useSession = create<SessionState>((set, get) => ({
       instruction,
     );
 
+    clearInterval(tick);
     applyPlan(result.plan, set, get);
 
     const info = result.usedFallback
@@ -541,6 +557,29 @@ export const useSession = create<SessionState>((set, get) => ({
     const loops = get().loops.map((l) => (l.id === id ? { ...l, muted: !l.muted } : l));
     transport.setLoops(loops);
     set({ loops });
+  },
+
+  clearTrack: () => {
+    transport.stop();
+    stopAllVoices();
+    transport.setLoops([]);
+    set({
+      loops: [],
+      plan: null,
+      lyrics: null,
+      liveEvents: [],
+      playing: false,
+      armed: false,
+      accuracyBefore: null,
+      accuracyAfter: null,
+      lastPlanInfo: null,
+      lastExportPath: null,
+      statusMessage: 'Track cleared — your sounds are kept',
+    });
+    if (isGuidanceEnabled()) {
+      guidance.clear();
+      speakNow('Track cleared. Your recorded sounds are still here.');
+    }
   },
 
   clearLiveLoop: () => {

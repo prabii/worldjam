@@ -16,6 +16,8 @@ interface Props {
   onTogglePlay: () => void;
   onSave: () => void;
   onShare: () => void;
+  /** Clears the arrangement, keeping the captured sounds. */
+  onDelete: () => void;
 }
 
 /**
@@ -34,6 +36,7 @@ export function TrackPlayer({
   onTogglePlay,
   onSave,
   onShare,
+  onDelete,
 }: Props) {
   const [progress, setProgress] = useState(0);
 
@@ -123,13 +126,22 @@ export function TrackPlayer({
           <Text style={styles.actionText}>Share</Text>
         </Pressable>
 
-        <View style={[styles.action, styles.actionDisabled]}>
-          <Text style={[styles.actionGlyph, styles.disabledGlyph]}>◎</Text>
-          <Text style={[styles.actionText, styles.disabledText]}>Jam Together</Text>
-        </View>
+        <Pressable
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+            onDelete();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Delete this track"
+          accessibilityHint="Removes the arrangement; your recorded sounds are kept"
+          style={styles.action}
+        >
+          <Text style={[styles.actionGlyph, { color: colors.danger }]}>✕</Text>
+          <Text style={[styles.actionText, { color: colors.danger }]}>Delete</Text>
+        </Pressable>
       </View>
 
-      <Text style={styles.soonNote}>Jam Together arrives in a future build.</Text>
+      <Text style={styles.soonNote}>Delete clears the track — your sounds stay.</Text>
     </View>
   );
 }

@@ -8,24 +8,22 @@ import { colors, radius, spacing, type } from '@/theme';
 interface Props {
   object: WorldJamObject;
   pcm: number[] | null;
-  /** Container size, so normalized positions become pixels. */
   containerWidth: number;
   containerHeight: number;
   onTrigger: (id: string) => void;
   onLongPress: (id: string) => void;
 }
 
-const LABEL_WIDTH = 96;
+const LABEL_WIDTH = 104;
 
 /**
- * A captured object anchored over the camera view — the neon-outlined labels
- * in panels 1 and 3 of the mockups.
+ * A captured object anchored over the camera view.
  *
- * This is the "AR" layer in its removable form (HLD v2 §2, S1): positions come
- * from where the user captured on screen, not from ARCore tracking. That is a
- * deliberate trade — it gives the visual language of the mockups with none of
- * the tracking risk the HLD warns about, and it still works in a dark room or
- * on a handset with no depth support.
+ * On tap this fires two concentric rings that expand and fade outward, plus a
+ * flash of the object's colour. The rings are the point: a flat label that
+ * only changes opacity reads as a button, whereas something radiating outward
+ * reads as a sound being emitted into the room — which is what is actually
+ * happening.
  */
 export function ARObjectLabel({
   object,
@@ -35,23 +33,27 @@ export function ARObjectLabel({
   onTrigger,
   onLongPress,
 }: Props) {
-  const glow = useRef(new Animated.Value(0)).current;
+  const breathe = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(1)).current;
+  const flash = useRef(new Animated.Value(0)).current;
 
-  // A slow breathing pulse so anchors read as live rather than as flat
-  // stickers, matching the glow in the mockups.
+  // Two rings, staggered, so a tap produces a ripple rather than one pop.
+  const ring1 = useRef(new Animated.Value(0)).current;
+  const ring2 = useRef(new Animated.Value(0)).current;
+
+  // Slow pulse so anchors read as live rather than as flat stickers.
   useEffect(() => {
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(glow, {
+        Animated.timing(breathe, {
           toValue: 1,
-          duration: 1800,
+          duration: 2000,
           easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
-        Animated.timing(glow, {
+        Animated.timing(breathe, {
           toValue: 0,
-          duration: 1800,
+          duration: 2000,
           easing: Easing.inOut(Easing.quad),
           useNativeDriver: true,
         }),
@@ -59,67 +61,139 @@ export function ARObjectLabel({
     );
     loop.start();
     return () => loop.stop();
-  }, [glow]);
+  }, [breathe]);
+
+  const handlePress = () => {
+    onTrigger(object.id);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+
+    ring1.setValue(0);
+    ring2.setValue(0);
+    flash.setValue(1);
+
+    Animated.parallel([
+      Animated.sequence([
+        Animated.timing(scale, { toValue: 1.15, duration: 90, useNativeDriver: true }),
+        Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 16 }),
+      ]),
+      Animated.timing(ring1, {
+        toValue: 1,
+        duration: 700,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+      // The second ring starts late, so the ripple has depth.
+      Animated.sequence([
+        Animated.delay(120),
+        Animated.timing(ring2, {
+          toValue: 1,
+          duration: 700,
+          easing: Easing.out(Easing.quad),
+          useNativeDriver: true,
+        }),
+      ]),
+      Animated.timing(flash, {
+        toValue: 0,
+        duration: 450,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
 
   // Keep the label fully on screen even when captured near an edge.
   const left = Math.max(
     spacing.sm,
-    Math.min(containerWidth - LABEL_WIDTH - spacing.sm, object.position.x * containerWidth - LABEL_WIDTH / 2),
+    Math.min(
+      containerWidth - LABEL_WIDTH - spacing.sm,
+      object.position.x * containerWidth - LABEL_WIDTH / 2,
+    ),
   );
   const top = Math.max(
     spacing.xxl,
-    Math.min(containerHeight - 90, object.position.y * containerHeight),
+    Math.min(containerHeight - 110, object.position.y * containerHeight),
   );
 
+  const ringStyle = (v: Animated.Value) => ({
+    opacity: v.interpolate({ inputRange: [0, 0.15, 1], outputRange: [0, 0.8, 0] }),
+    transform: [
+      { scale: v.interpolate({ inputRange: [0, 1], outputRange: [0.75, 2.6] }) },
+    ],
+  });
+
   return (
-    <Animated.View
-      style={[
-        styles.wrap,
-        { left, top, transform: [{ scale }] },
-      ]}
-    >
+    <Animated.View style={[styles.wrap, { left, top, transform: [{ scale }] }]}>
+      {/* Ripples, drawn behind the card and ignoring touches. */}
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.ring, { borderColor: object.color }, ringStyle(ring1)]}
+      />
+      <Animated.View
+        pointerEvents="none"
+        style={[styles.ring, { borderColor: object.color }, ringStyle(ring2)]}
+      />
+
       <Pressable
-        onPressIn={() => {
-          onTrigger(object.id);
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-          Animated.sequence([
-            Animated.timing(scale, {
-              toValue: 1.12,
-              duration: 90,
-              useNativeDriver: true,
-            }),
-            Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 18 }),
-          ]).start();
-        }}
+        onPress={handlePress}
         onLongPress={() => onLongPress(object.id)}
         delayLongPress={500}
         accessibilityRole="button"
         accessibilityLabel={`Play ${object.label}`}
+        accessibilityHint="Long press to delete"
       >
+        {/* Soft halo that breathes, so the anchor reads as alive. */}
         <Animated.View
+          pointerEvents="none"
           style={[
             styles.halo,
             {
               borderColor: object.color,
-              opacity: glow.interpolate({ inputRange: [0, 1], outputRange: [0.25, 0.65] }),
+              opacity: breathe.interpolate({
+                inputRange: [0, 1],
+                outputRange: [0.2, 0.55],
+              }),
+              transform: [
+                {
+                  scale: breathe.interpolate({
+                    inputRange: [0, 1],
+                    outputRange: [1, 1.06],
+                  }),
+                },
+              ],
             },
           ]}
         />
 
-        <View style={[styles.label, { borderColor: object.color }]}>
+        <View style={[styles.card, { borderColor: object.color }]}>
+          {/* Colour wash on trigger. */}
+          <Animated.View
+            pointerEvents="none"
+            style={[
+              StyleSheet.absoluteFill,
+              styles.flash,
+              {
+                backgroundColor: object.color,
+                opacity: flash.interpolate({
+                  inputRange: [0, 1],
+                  outputRange: [0, 0.4],
+                }),
+              },
+            ]}
+          />
+
           <Text style={styles.name} numberOfLines={1}>
             {object.label}
           </Text>
           <Text style={[styles.role, { color: object.color }]} numberOfLines={1}>
-            ({object.role})
+            {object.role}
           </Text>
 
           <Waveform
             pcm={pcm}
             width={LABEL_WIDTH - spacing.md}
-            height={18}
+            height={20}
             color={object.color}
-            bars={20}
+            bars={22}
           />
         </View>
       </Pressable>
@@ -128,21 +202,39 @@ export function ARObjectLabel({
 }
 
 const styles = StyleSheet.create({
-  wrap: { position: 'absolute', width: LABEL_WIDTH },
+  wrap: { position: 'absolute', width: LABEL_WIDTH, alignItems: 'center' },
+
+  ring: {
+    position: 'absolute',
+    top: '50%',
+    left: '50%',
+    width: LABEL_WIDTH,
+    height: LABEL_WIDTH,
+    marginLeft: -LABEL_WIDTH / 2,
+    marginTop: -LABEL_WIDTH / 2,
+    borderRadius: LABEL_WIDTH / 2,
+    borderWidth: 2,
+  },
+
   halo: {
     ...StyleSheet.absoluteFillObject,
-    borderRadius: radius.md,
+    borderRadius: radius.md + 3,
     borderWidth: 3,
   },
-  label: {
+
+  card: {
+    width: LABEL_WIDTH,
     borderRadius: radius.md,
     borderWidth: 1.5,
-    backgroundColor: 'rgba(10, 12, 16, 0.86)',
+    backgroundColor: 'rgba(10, 12, 16, 0.88)',
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
-    gap: 2,
+    gap: 3,
     alignItems: 'center',
+    overflow: 'hidden',
   },
+  flash: { borderRadius: radius.md },
+
   name: { ...type.label, fontSize: 12, color: colors.text },
   role: { ...type.caption, fontSize: 9, textTransform: 'lowercase' },
 });

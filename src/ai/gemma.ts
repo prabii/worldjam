@@ -37,8 +37,17 @@ export function isGemmaReady(): boolean {
   return runtime?.isReady() ?? false;
 }
 
-/** Beyond this the user is just watching a spinner, so we take the fallback. */
-export const PLAN_TIMEOUT_MS = 4000;
+/**
+ * How long to wait for the model before using the rule-based arranger.
+ *
+ * Measured on this project's dev phone (MediaTek MT6878, CPU-only llama.cpp):
+ * a 4.6B model needs well over 4 s for even a short JSON response, so the
+ * original 4 s budget meant the model never once beat the fallback. 25 s is
+ * long for a spinner, but arranging is an explicit button press rather than
+ * part of the real-time loop, and the alternative is shipping a model that
+ * never actually runs.
+ */
+export const PLAN_TIMEOUT_MS = 25000;
 
 export interface SessionSnapshot {
   objects: WorldJamObject[];
@@ -144,7 +153,9 @@ export async function generatePlan(
   const started = Date.now();
   try {
     const raw = await withTimeout(
-      runtime.generate(buildPrompt(snapshot, instruction), 320),
+      // 200 tokens is enough for the arrangement JSON and roughly a third
+      // faster than 320 on a phone CPU.
+      runtime.generate(buildPrompt(snapshot, instruction), 200),
       PLAN_TIMEOUT_MS,
     );
     const elapsedMs = Date.now() - started;
