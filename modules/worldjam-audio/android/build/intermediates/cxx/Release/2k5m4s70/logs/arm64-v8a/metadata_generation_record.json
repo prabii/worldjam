@@ -1,0 +1,80 @@
+[
+  {
+    "level_": 0,
+    "message_": "Start JSON generation. Platform version: 26 min SDK version: arm64-v8a",
+    "file_": "D:\\World_jam\\modules\\worldjam-audio\\android\\src\\main\\cpp\\CMakeLists.txt",
+    "tag_": "release|arm64-v8a",
+    "diagnosticCode_": 0,
+    "memoizedIsInitialized": 1,
+    "unknownFields": {
+      "fields": {}
+    },
+    "memoizedSize": -1,
+    "memoizedHashCode": 0
+  },
+  {
+    "level_": 0,
+    "message_": "rebuilding JSON D:\\World_jam\\modules\\worldjam-audio\\android\\.cxx\\Release\\2k5m4s70\\arm64-v8a\\android_gradle_build.json due to:",
+    "file_": "D:\\World_jam\\modules\\worldjam-audio\\android\\src\\main\\cpp\\CMakeLists.txt",
+    "tag_": "release|arm64-v8a",
+    "diagnosticCode_": 0,
+    "memoizedIsInitialized": 1,
+    "unknownFields": {
+      "fields": {}
+    },
+    "memoizedSize": -1,
+    "memoizedHashCode": 0
+  },
+  {
+    "level_": 0,
+    "message_": "- no fingerprint file, will remove stale configuration folder",
+    "file_": "D:\\World_jam\\modules\\worldjam-audio\\android\\src\\main\\cpp\\CMakeLists.txt",
+    "tag_": "release|arm64-v8a",
+    "diagnosticCode_": 0,
+    "memoizedIsInitialized": 1,
+    "unknownFields": {
+      "fields": {}
+    },
+    "memoizedSize": -1,
+    "memoizedHashCode": 0
+  },
+  {
+    "level_": 0,
+    "message_": "@echo off\n\"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\java\" ^\n  --class-path ^\n  \"C:\\\\Users\\\\codep\\\\.gradle\\\\caches\\\\modules-2\\\\files-2.1\\\\com.google.prefab\\\\cli\\\\2.1.0\\\\aa32fec809c44fa531f01dcfb739b5b3304d3050\\\\cli-2.1.0-all.jar\" ^\n  com.google.prefab.cli.AppKt ^\n  --build-system ^\n  cmake ^\n  --platform ^\n  android ^\n  --abi ^\n  arm64-v8a ^\n  --os-version ^\n  26 ^\n  --stl ^\n  c++_shared ^\n  --ndk-version ^\n  26 ^\n  --output ^\n  \"C:\\\\Users\\\\codep\\\\AppData\\\\Local\\\\Temp\\\\agp-prefab-staging15958529501607345416\\\\staged-cli-output\" ^\n  \"C:\\\\Users\\\\codep\\\\.gradle\\\\caches\\\\8.10.2\\\\transforms\\\\623f9e3f29b20e2d76e330ee188bb967\\\\transformed\\\\oboe-1.9.0\\\\prefab\"\n",
+    "file_": "D:\\World_jam\\modules\\worldjam-audio\\android\\src\\main\\cpp\\CMakeLists.txt",
+    "tag_": "release|arm64-v8a",
+    "diagnosticCode_": 0,
+    "memoizedIsInitialized": 1,
+    "unknownFields": {
+      "fields": {}
+    },
+    "memoizedSize": -1,
+    "memoizedHashCode": 0
+  },
+  {
+    "level_": 0,
+    "message_": "Received process result: 1",
+    "file_": "D:\\World_jam\\modules\\worldjam-audio\\android\\src\\main\\cpp\\CMakeLists.txt",
+    "tag_": "release|arm64-v8a",
+    "diagnosticCode_": 0,
+    "memoizedIsInitialized": 1,
+    "unknownFields": {
+      "fields": {}
+    },
+    "memoizedSize": -1,
+    "memoizedHashCode": 0
+  },
+  {
+    "level_": 0,
+    "message_": "JSON generation completed with problem. Exception: com.android.ide.common.process.ProcessException: #\n# There is insufficient memory for the Java Runtime Environment to continue.\n# Native memory allocation (mmap) failed to map 123731968 bytes. Error detail: G1 virtual space\n# An error report file with more information is saved as:\n# D:\\World_jam\\modules\\worldjam-audio\\android\\hs_err_pid141216.log\n\nC++ build system [prefab] failed while executing:\n    @echo off\n    \"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\\\\bin\\\\java\" ^\n      --class-path ^\n      \"C:\\\\Users\\\\codep\\\\.gradle\\\\caches\\\\modules-2\\\\files-2.1\\\\com.google.prefab\\\\cli\\\\2.1.0\\\\aa32fec809c44fa531f01dcfb739b5b3304d3050\\\\cli-2.1.0-all.jar\" ^\n      com.google.prefab.cli.AppKt ^\n      --build-system ^\n      cmake ^\n      --platform ^\n      android ^\n      --abi ^\n      arm64-v8a ^\n      --os-version ^\n      26 ^\n      --stl ^\n      c++_shared ^\n      --ndk-version ^\n      26 ^\n      --output ^\n      \"C:\\\\Users\\\\codep\\\\AppData\\\\Local\\\\Temp\\\\agp-prefab-staging15958529501607345416\\\\staged-cli-output\" ^\n      \"C:\\\\Users\\\\codep\\\\.gradle\\\\caches\\\\8.10.2\\\\transforms\\\\623f9e3f29b20e2d76e330ee188bb967\\\\transformed\\\\oboe-1.9.0\\\\prefab\"\n  from D:\\World_jam\\modules\\worldjam-audio\\android\nOpenJDK 64-Bit Server VM warning: INFO: os::commit_memory(0x000000008a200000, 123731968, 0) failed; error\u003d\u0027The paging file is too small for this operation to complete\u0027 (DOS error/errno\u003d1455)",
+    "file_": "D:\\World_jam\\modules\\worldjam-audio\\android\\src\\main\\cpp\\CMakeLists.txt",
+    "tag_": "release|arm64-v8a",
+    "diagnosticCode_": 0,
+    "memoizedIsInitialized": 1,
+    "unknownFields": {
+      "fields": {}
+    },
+    "memoizedSize": -1,
+    "memoizedHashCode": 0
+  }
+]

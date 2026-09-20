@@ -1,0 +1,5 @@
+#
+# There is insufficient memory for the Java Runtime Environment to continue.
+# Native memory allocation (mmap) failed to map 123731968 bytes. Error detail: G1 virtual space
+# An error report file with more information is saved as:
+# D:\World_jam\modules\worldjam-audio\android\hs_err_pid141216.log

@@ -467,26 +467,20 @@ function applyPlan(
   const labelToId = new Map<string, string>();
   for (const o of state.objects) labelToId.set(o.label.toLowerCase(), o.id);
 
-  const events = planToLoopEvents(plan.objectPattern, labelToId, plan.bars);
+  const objectEvents = planToLoopEvents(plan.objectPattern, labelToId, plan.bars);
 
-  const planLoop: Loop = {
-    id: PLAN_LOOP_ID,
-    name: 'AI arrangement',
-    events,
-    bars: plan.bars,
-    muted: false,
-    createdAt: Date.now(),
-  };
-
-  const loops = upsertLoop(state.loops, planLoop);
-
-  // Render accompaniment. Each layer becomes one long sample triggered at the
-  // top of the loop, which keeps per-beat scheduling cost at zero.
+  // Render accompaniment. Each layer becomes one long sample fired once at the
+  // top of the loop, so it costs the same as a single object hit rather than
+  // one scheduled event per beat.
   const sr = sampleRate();
+  const layerEvents: LoopEvent[] = [];
   const rendered = new Set<number>();
+
   for (const layer of plan.accompaniment) {
     const slot = LAYER_SLOTS[layer];
+    // 'chords' and 'pad' share a slot; rendering both would overwrite one.
     if (rendered.has(slot)) continue;
+
     const pcm = renderLayer(layer, {
       sampleRate: sr,
       bpm: plan.bpm,
@@ -497,8 +491,20 @@ function applyPlan(
     loadSample(slot, pcm, 1);
     rendered.add(slot);
 
-    events.push({ objectId: `layer:${layer}`, beat: 0, velocity: 1 });
+    layerEvents.push({ objectId: `layer:${layer}`, beat: 0, velocity: 1 });
   }
+
+  const planLoop: Loop = {
+    id: PLAN_LOOP_ID,
+    name: 'AI arrangement',
+    // Built once, fully formed, and sorted — the scheduler walks these in order.
+    events: [...objectEvents, ...layerEvents].sort((a, b) => a.beat - b.beat),
+    bars: plan.bars,
+    muted: false,
+    createdAt: Date.now(),
+  };
+
+  const loops = upsertLoop(state.loops, planLoop);
 
   transport.setResolver((objectId) => {
     if (objectId.startsWith('layer:')) {
