@@ -9,7 +9,7 @@ import type { LatencyReport } from '@/types';
 
 export const MAX_SLOTS = 16;
 /** Slots reserved at the top for accompaniment layers and the vocal take. */
-export const RESERVED_SLOTS = 5;
+export const RESERVED_SLOTS = 6;
 export const OBJECT_SLOTS = MAX_SLOTS - RESERVED_SLOTS;
 
 export const SLOT_VOCAL = MAX_SLOTS - 1;
@@ -17,6 +17,7 @@ export const SLOT_BASS = MAX_SLOTS - 2;
 export const SLOT_CHORDS = MAX_SLOTS - 3;
 export const SLOT_ARP = MAX_SLOTS - 4;
 export const SLOT_GUITAR = MAX_SLOTS - 5;
+export const SLOT_PERC = MAX_SLOTS - 6;
 
 let started = false;
 

@@ -18,7 +18,7 @@ import type {
  */
 
 const STYLES: Style[] = ['chill', 'jazz', 'lofi', 'cinematic', 'edm', 'rock'];
-const LAYERS: AccompanimentLayer[] = ['bass', 'chords', 'pad', 'arp', 'guitar'];
+const LAYERS: AccompanimentLayer[] = ['bass', 'chords', 'pad', 'arp', 'guitar', 'perc'];
 const VOICE_ROLES = ['lead', 'harmony', 'texture', 'none'] as const;
 
 export const BPM_MIN = 60;

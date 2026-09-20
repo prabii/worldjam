@@ -113,7 +113,7 @@ export interface ArrangementPlan {
   reasoning?: string;
 }
 
-export type AccompanimentLayer = 'bass' | 'chords' | 'pad' | 'arp' | 'guitar';
+export type AccompanimentLayer = 'bass' | 'chords' | 'pad' | 'arp' | 'guitar' | 'perc';
 
 export interface WorldJamSession {
   bpm: number;

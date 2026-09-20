@@ -87,13 +87,21 @@ const STYLE_BPM: Record<Style, number> = {
   rock: 110,
 };
 
+/**
+ * Layers per style.
+ *
+ * Every style includes 'perc': two recorded objects cannot carry a groove on
+ * their own, and a shaker/hat pattern underneath gives the loop a pulse
+ * without competing with the real sounds. Sparse captures sounded empty
+ * without it.
+ */
 const STYLE_LAYERS: Record<Style, AccompanimentLayer[]> = {
-  chill: ['bass'],
-  jazz: ['bass', 'chords'],
-  lofi: ['bass', 'chords', 'pad'],
-  cinematic: ['pad', 'chords'],
-  edm: ['bass', 'arp'],
-  rock: ['bass', 'guitar'],
+  chill: ['bass', 'chords', 'perc'],
+  jazz: ['bass', 'chords', 'perc'],
+  lofi: ['bass', 'chords', 'pad', 'perc'],
+  cinematic: ['pad', 'chords', 'perc'],
+  edm: ['bass', 'arp', 'perc'],
+  rock: ['bass', 'guitar', 'perc'],
 };
 
 /**

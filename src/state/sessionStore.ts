@@ -13,6 +13,7 @@ import {
   SLOT_BASS,
   SLOT_CHORDS,
   SLOT_GUITAR,
+  SLOT_PERC,
   SLOT_VOCAL,
   allocateSlot,
   clearSlot,
@@ -135,6 +136,7 @@ const LAYER_SLOTS = {
   pad: SLOT_CHORDS,
   arp: SLOT_ARP,
   guitar: SLOT_GUITAR,
+  perc: SLOT_PERC,
 } as const;
 
 const LIVE_LOOP_ID = 'live';
