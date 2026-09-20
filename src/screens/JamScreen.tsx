@@ -11,6 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CaptureButton } from '@/components/CaptureButton';
 import { LatencyBadge } from '@/components/LatencyBadge';
 import { LayerList } from '@/components/LayerList';
+import { LyricDisplay } from '@/components/LyricDisplay';
 import { QuantizePanel } from '@/components/QuantizePanel';
 import { RhythmGuide } from '@/components/RhythmGuide';
 import { SoundObjectCard } from '@/components/SoundObjectCard';
@@ -24,6 +25,7 @@ import {
   subscribeModelStatus,
   type ModelStatus,
 } from '@/ai/modelLoader';
+import { speakNow } from '@/audio/speech';
 import { useSession } from '@/state/sessionStore';
 import { colors, radius, spacing, type } from '@/theme';
 
@@ -124,6 +126,38 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
         {/* --- rhythm guide (panel 5) --- */}
         <View style={styles.sectionPad}>
           <RhythmGuide plan={s.plan} objects={s.objects} playing={s.playing} />
+        </View>
+
+        {/* --- lyrics --- */}
+        <View style={styles.sectionPad}>
+          {s.lyrics ? (
+            <LyricDisplay
+              lyrics={s.lyrics}
+              bars={s.bars}
+              playing={s.playing}
+              speakEnabled={s.guidanceOn}
+              onSpeakLine={speakNow}
+            />
+          ) : null}
+
+          <Pressable
+            onPress={() => s.writeLyrics()}
+            disabled={s.writingLyrics || !s.plan}
+            accessibilityRole="button"
+            style={[
+              styles.lyricButton,
+              (s.writingLyrics || !s.plan) && styles.lyricButtonDisabled,
+              s.lyrics ? { marginTop: spacing.sm } : null,
+            ]}
+          >
+            {s.writingLyrics ? (
+              <ActivityIndicator color={colors.vibe} />
+            ) : (
+              <Text style={styles.lyricButtonText}>
+                {s.lyrics ? 'Write new lyrics' : '✎ Write lyrics for this track'}
+              </Text>
+            )}
+          </Pressable>
         </View>
 
         {/* --- arrange (panel 6 trigger) --- */}
@@ -266,6 +300,18 @@ const styles = StyleSheet.create({
     minHeight: 52,
   },
   arrangeDisabled: { backgroundColor: colors.surfaceRaised },
+  lyricButton: {
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.vibe,
+    backgroundColor: colors.vibeDim,
+    alignItems: 'center',
+    minHeight: 46,
+    justifyContent: 'center',
+  },
+  lyricButtonDisabled: { borderColor: colors.border, backgroundColor: colors.surfaceRaised },
+  lyricButtonText: { ...type.label, color: colors.vibe },
   arrangeText: { ...type.label, color: colors.bg },
   modelRow: {
     flexDirection: 'row',

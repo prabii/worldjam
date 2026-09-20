@@ -49,6 +49,7 @@ import {
 } from '@/dsp/quantize';
 import { generatePlan, parseStyleCommand } from '@/ai/gemma';
 import { buildFallbackPlan, restylePlan } from '@/ai/fallbackArranger';
+import { generateLyrics, type LyricSet } from '@/ai/lyrics';
 
 import { colors as themeColors } from '@/theme';
 
@@ -87,6 +88,9 @@ interface SessionState {
   accuracyAfter: number | null;
   lastPlanInfo: string | null;
   statusMessage: string | null;
+  /** AI-written lyrics for the current arrangement. */
+  lyrics: LyricSet | null;
+  writingLyrics: boolean;
   /** True while a mixdown is being rendered and written. */
   exporting: boolean;
   /** Path of the most recent export, for sharing without re-rendering. */
@@ -115,6 +119,7 @@ interface SessionState {
   toggleLoopMute: (id: string) => void;
   clearLiveLoop: () => void;
   setStatus: (msg: string | null) => void;
+  writeLyrics: (mood?: string) => Promise<void>;
   /** Spoken guidance for accessibility and hands-free coaching. */
   guidanceOn: boolean;
   setGuidance: (on: boolean) => void;
@@ -155,6 +160,8 @@ export const useSession = create<SessionState>((set, get) => ({
   accuracyAfter: null,
   lastPlanInfo: null,
   statusMessage: null,
+  lyrics: null,
+  writingLyrics: false,
   exporting: false,
   lastExportPath: null,
   guidanceOn: false,
@@ -163,6 +170,36 @@ export const useSession = create<SessionState>((set, get) => ({
   liveEvents: [],
 
   setStatus: (msg) => set({ statusMessage: msg }),
+
+  writeLyrics: async (mood) => {
+    const state = get();
+    if (!state.plan) {
+      set({ statusMessage: 'Arrange the track first.' });
+      return;
+    }
+    if (state.writingLyrics) return;
+
+    set({ writingLyrics: true, statusMessage: 'Writing lyrics…' });
+
+    const result = await generateLyrics(
+      state.objects,
+      state.plan,
+      state.vocalTake,
+      mood,
+    );
+
+    set({
+      lyrics: result.lyrics,
+      writingLyrics: false,
+      statusMessage: result.usedFallback
+        ? 'Lyrics written (template)'
+        : `Lyrics by Gemma · ${((result.elapsedMs ?? 0) / 1000).toFixed(1)}s`,
+    });
+
+    if (isGuidanceEnabled()) {
+      speakNow(`Lyrics ready. ${result.lyrics.hook}`);
+    }
+  },
 
   setGuidance: (on) => {
     setGuidanceEnabled(on);
