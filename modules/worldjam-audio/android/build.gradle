@@ -1,0 +1,51 @@
+apply plugin: 'com.android.library'
+apply plugin: 'kotlin-android'
+
+group = 'com.worldjam.audio'
+version = '0.1.0'
+
+android {
+  namespace 'com.worldjam.audio'
+  compileSdk 35
+
+  defaultConfig {
+    minSdk 26
+    consumerProguardFiles 'proguard-rules.pro'
+
+    externalNativeBuild {
+      cmake {
+        // Oboe requires C++17; shared STL keeps the .so small.
+        arguments '-DANDROID_STL=c++_shared', '-DCMAKE_BUILD_TYPE=Release'
+        cppFlags '-std=c++17 -O3'
+      }
+    }
+
+    ndk {
+      // 64-bit only: the iQOO 15 is arm64, and dropping armeabi halves build time.
+      abiFilters 'arm64-v8a'
+    }
+  }
+
+  externalNativeBuild {
+    cmake {
+      path 'src/main/cpp/CMakeLists.txt'
+      version '3.22.1'
+    }
+  }
+
+  buildFeatures { prefab true }
+
+  compileOptions {
+    sourceCompatibility JavaVersion.VERSION_17
+    targetCompatibility JavaVersion.VERSION_17
+  }
+  kotlinOptions { jvmTarget = '17' }
+}
+
+apply from: project(':expo-modules-core').file('expo-module-gradle-plugin/ExpoModuleGradlePlugin.gradle')
+
+dependencies {
+  implementation project(':expo-modules-core')
+  implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion"
+  implementation 'com.google.oboe:oboe:1.9.0'
+}

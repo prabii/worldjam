@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "WorldJam",
+    "slug": "worldjam",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "android": {
+      "package": "com.prxfr.worldjam",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.MODIFY_AUDIO_SETTINGS",
+        "android.permission.VIBRATE"
+      ]
+    },
+    "plugins": [
+      "expo-dev-client",
+      [
+        "expo-camera",
+        { "cameraPermission": "WorldJam uses the camera to place sound objects in your room." }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "minSdkVersion": 26,
+            "compileSdkVersion": 35,
+            "targetSdkVersion": 35
+          }
+        }
+      ]
+    ],
+    "experiments": { "typedRoutes": false }
+  }
+}

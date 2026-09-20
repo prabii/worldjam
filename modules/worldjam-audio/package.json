@@ -1,0 +1,7 @@
+{
+  "name": "worldjam-audio",
+  "version": "0.1.0",
+  "description": "Native low-latency audio engine for WorldJam (Oboe/AAudio)",
+  "main": "src/index.ts",
+  "private": true
+}
