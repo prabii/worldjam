@@ -24,6 +24,8 @@ import {
   trigger,
 } from '@/audio/engine';
 import { renderLayer } from '@/audio/synth';
+import { encodeWav, mixSession, toBase64 } from '@/audio/render';
+import * as FileSystem from 'expo-file-system';
 import { planToLoopEvents, transport } from '@/audio/transport';
 import {
   detectKey,
@@ -57,6 +59,12 @@ export type CaptureTarget =
 interface SessionState {
   // --- session data ---
   objects: WorldJamObject[];
+  /**
+   * Raw mono PCM per slot. The native engine owns its own copy for playback;
+   * this mirror exists so the offline renderer can mix without reading back
+   * across the bridge.
+   */
+  pcmBySlot: Map<number, number[]>;
   loops: Loop[];
   vocalTake: VocalTake | null;
   plan: ArrangementPlan | null;
@@ -98,6 +106,7 @@ interface SessionState {
   toggleLoopMute: (id: string) => void;
   clearLiveLoop: () => void;
   setStatus: (msg: string | null) => void;
+  exportTrack: () => Promise<string | null>;
   reset: () => void;
 }
 
@@ -115,6 +124,7 @@ const PLAN_LOOP_ID = 'plan';
 
 export const useSession = create<SessionState>((set, get) => ({
   objects: [],
+  pcmBySlot: new Map(),
   loops: [],
   vocalTake: null,
   plan: null,
@@ -175,6 +185,7 @@ export const useSession = create<SessionState>((set, get) => ({
       const key = detectKey(notes);
 
       loadSample(SLOT_VOCAL, pcm, 1);
+      get().pcmBySlot.set(SLOT_VOCAL, pcm);
 
       const take: VocalTake = {
         id: `vocal-${Date.now()}`,
@@ -208,6 +219,7 @@ export const useSession = create<SessionState>((set, get) => ({
     }
 
     loadSample(slot, pcm, 1);
+    state.pcmBySlot.set(slot, pcm);
 
     const obj: WorldJamObject = {
       id: `obj-${Date.now()}-${slot}`,
@@ -239,6 +251,7 @@ export const useSession = create<SessionState>((set, get) => ({
     const obj = get().objects.find((o) => o.id === id);
     if (!obj) return;
     clearSlot(obj.slot);
+    get().pcmBySlot.delete(obj.slot);
     set((s) => ({
       objects: s.objects.filter((o) => o.id !== id),
       liveEvents: s.liveEvents.filter((e) => e.objectId !== id),
@@ -426,9 +439,55 @@ export const useSession = create<SessionState>((set, get) => ({
     set({ loops, liveEvents: [], accuracyBefore: null, accuracyAfter: null });
   },
 
+  exportTrack: async () => {
+    const state = get();
+    if (state.loops.length === 0) {
+      set({ statusMessage: 'Nothing to export yet.' });
+      return null;
+    }
+
+    set({ statusMessage: 'Rendering…' });
+
+    try {
+      const samples = new Map<number, number[]>(state.pcmBySlot);
+
+      const mixed = mixSession(
+        {
+          samples,
+          objects: state.objects,
+          loops: state.loops,
+          plan: state.plan,
+          bpm: state.bpm,
+          bars: state.bars,
+          sampleRate: sampleRate(),
+          repeats: 4,
+        },
+        (layer) => LAYER_SLOTS[layer as keyof typeof LAYER_SLOTS] ?? null,
+      );
+
+      const wav = encodeWav(mixed, sampleRate(), 2);
+      const path = `${FileSystem.documentDirectory}worldjam-${Date.now()}.wav`;
+
+      await FileSystem.writeAsStringAsync(path, toBase64(wav), {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const seconds = mixed.length / 2 / sampleRate();
+      set({ statusMessage: `Exported ${seconds.toFixed(1)}s track` });
+      return path;
+    } catch (err) {
+      set({
+        statusMessage: `Export failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+      return null;
+    }
+  },
+
   reset: () => {
     transport.stop();
-    for (const o of get().objects) clearSlot(o.slot);
+    const current = get();
+    for (const o of current.objects) clearSlot(o.slot);
+    current.pcmBySlot.clear();
     set({
       objects: [],
       loops: [],
@@ -489,6 +548,7 @@ function applyPlan(
       style: plan.style,
     });
     loadSample(slot, pcm, 1);
+    state.pcmBySlot.set(slot, pcm);
     rendered.add(slot);
 
     layerEvents.push({ objectId: `layer:${layer}`, beat: 0, velocity: 1 });

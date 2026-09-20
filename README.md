@@ -40,7 +40,7 @@ you so in a banner rather than crashing), but nothing will make sound.
 Requirements: Node 20+, JDK 17+, Android SDK 35, NDK 26.1, CMake 3.22.1.
 
 ```bash
-npm test          # 88 tests: DSP, quantize, plan validation
+npm test          # 113 tests: DSP, quantize, plan validation, transport, render
 npm run typecheck
 ```
 
@@ -101,6 +101,7 @@ above it.
 | C2 | Re-trigger in <50 ms | ✅ native Oboe path + on-screen measurement |
 | C3 | Hum → melody | ✅ YIN pitch, note segmentation, key detection |
 | C4 | Loop + layer | ✅ arm/record/overdub, look-ahead scheduler |
+| — | Session export | ✅ offline WAV mixdown (HLD §5 Session Renderer) |
 
 **Tier 2 — The AI Bandmate** (what makes it win)
 
@@ -162,7 +163,7 @@ Every beat of that works offline with no AR.
 
 ## Known gaps
 
-- **No on-device model is wired up** — the runtime interface is there and tested, the backend is not chosen.
+- **No on-device model is wired up** — the runtime interface is there and tested, the backend is not chosen. The rule-based arranger covers this completely in the meantime.
 - **Tier 3 (AR anchors, multiplayer) is not built** — deliberately, per the HLD's own ordering.
-- **Latency is unverified on real hardware.** It compiles and the measurement harness is live, but no phone has run it yet. That is the go/no-go and it is still open.
-- Session rendering/export (HLD §5 "Session Renderer") is not implemented.
+- **Latency is unverified on real hardware.** The C++ compiles to an arm64 `.so` and the measurement harness is live, but no phone has run it. That is the HLD's go/no-go and it is still open.
+- **The full APK has not been assembled on this machine.** `libworldjam_audio.so` builds; assembling the whole app repeatedly exhausted RAM (7.4 GB machine). See [docs/PRE_EVENT.md](docs/PRE_EVENT.md).

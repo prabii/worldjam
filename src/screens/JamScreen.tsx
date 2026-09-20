@@ -89,6 +89,22 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
         </View>
 
         <View style={styles.sectionPad}>
+          <Pressable
+            onPress={() => s.exportTrack()}
+            disabled={s.loops.length === 0}
+            accessibilityRole="button"
+            accessibilityLabel="Export the session as a WAV file"
+            style={[styles.export, s.loops.length === 0 && styles.exportDisabled]}
+          >
+            <Text
+              style={[styles.exportText, s.loops.length === 0 && styles.exportTextDisabled]}
+            >
+              Export track
+            </Text>
+          </Pressable>
+        </View>
+
+        <View style={styles.sectionPad}>
           <View style={styles.vocalRow}>
             <CaptureButton
               recording={s.recording?.kind === 'vocal'}
@@ -220,6 +236,16 @@ const styles = StyleSheet.create({
     minHeight: 52,
   },
   arrangeDisabled: { backgroundColor: colors.surfaceRaised },
+  export: {
+    paddingVertical: spacing.md,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.borderStrong,
+    alignItems: 'center',
+  },
+  exportDisabled: { borderColor: colors.border },
+  exportText: { ...type.label, color: colors.text },
+  exportTextDisabled: { color: colors.textFaint },
   arrangeText: { ...type.label, color: colors.bg },
   planInfo: {
     ...type.caption,
