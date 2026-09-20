@@ -22,6 +22,7 @@
     "expo-haptics": "~14.0.0",
     "expo-keep-awake": "~14.0.1",
     "expo-sharing": "~13.0.1",
+    "expo-speech": "~13.0.1",
     "expo-status-bar": "~2.0.0",
     "llama.rn": "^0.12.9",
     "react": "18.3.1",

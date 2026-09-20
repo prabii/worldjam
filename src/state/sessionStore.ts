@@ -29,6 +29,8 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { planToLoopEvents, transport } from '@/audio/transport';
 import { cleanCapture } from '@/dsp/denoise';
+import { buildRhythmCues, describeCapture } from '@/audio/guidance';
+import { guidance, isGuidanceEnabled, setGuidanceEnabled, speakNow } from '@/audio/speech';
 import {
   detectKey,
   detectOnsets,
@@ -111,6 +113,9 @@ interface SessionState {
   toggleLoopMute: (id: string) => void;
   clearLiveLoop: () => void;
   setStatus: (msg: string | null) => void;
+  /** Spoken guidance for accessibility and hands-free coaching. */
+  guidanceOn: boolean;
+  setGuidance: (on: boolean) => void;
   exportTrack: () => Promise<string | null>;
   shareTrack: () => Promise<void>;
   reset: () => void;
@@ -150,11 +155,22 @@ export const useSession = create<SessionState>((set, get) => ({
   statusMessage: null,
   exporting: false,
   lastExportPath: null,
+  guidanceOn: false,
 
   armed: false,
   liveEvents: [],
 
   setStatus: (msg) => set({ statusMessage: msg }),
+
+  setGuidance: (on) => {
+    setGuidanceEnabled(on);
+    set({ guidanceOn: on });
+    if (on) {
+      speakNow('Voice guidance on.');
+    } else {
+      guidance.clear();
+    }
+  },
 
   beginCapture: (target) => {
     if (get().recording) return false;
@@ -259,6 +275,11 @@ export const useSession = create<SessionState>((set, get) => ({
     // Confirm the capture by playing it back immediately: the user hears their
     // own object, which is the core promise of the product.
     trigger(slot, 1, obj.pan);
+
+    // Spoken confirmation means a capture can be verified without looking.
+    if (isGuidanceEnabled()) {
+      speakNow(describeCapture(obj, cleaned.noiseReducedDb));
+    }
   },
 
   removeObject: (id) => {
@@ -617,6 +638,14 @@ function applyPlan(
     const obj = get().objects.find((o) => o.id === objectId);
     return obj ? { slot: obj.slot, gain: obj.volume, pan: obj.pan } : null;
   });
+
+  // Rebuild the spoken call sequence for the new arrangement.
+  if (isGuidanceEnabled()) {
+    guidance.clear();
+    for (const cue of buildRhythmCues(plan, state.objects)) {
+      guidance.enqueue(cue);
+    }
+  }
 
   transport.setTempo(plan.bpm, plan.bars);
   transport.setLoops(loops);

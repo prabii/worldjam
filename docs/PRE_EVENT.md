@@ -24,6 +24,33 @@ beforehand — plus what this repo already settles.
 
 ## Still to do, in priority order
 
+### 0. MEASURED: dev phone is in shared mode, not exclusive
+
+On the vivo I2410 (MediaTek MT6878) the engine reports:
+
+```
+Playback stream open: rate=48000 burst=770 buffer=1540 exclusive=0
+```
+
+Two problems, both device-side rather than code:
+
+- **`exclusive=0`** — Android granted a SHARED stream, so audio routes through
+  the system mixer and picks up its latency.
+- **`burst=770`** — a low-latency device reports 96–256 frames. 770 frames at
+  48 kHz is ~16 ms per burst, so a 2-burst buffer is ~32 ms of output
+  buffering before the mic path or touch latency is counted.
+
+MediaTek's AAudio implementation is generally weaker than Qualcomm's for
+exclusive-mode low-latency streams. **Re-measure on the iQOO 15 (Snapdragon)
+before concluding anything about the product** — the loaner should do
+substantially better, and the HLD's budget was written for that device.
+
+If the loaner also reports shared mode, try in order:
+1. `setBufferSizeInFrames(burst * 1)` instead of `* 2` in `openPlaybackStream`
+2. Drop `setSampleRate(48000)` and accept the device's native rate (a mismatch
+   forces resampling through the mixer)
+3. Disable any system audio effects / Dolby processing in device settings
+
 ### 1. Run the latency spike on the real phone — go/no-go
 
 Nothing else matters until this passes. Build a dev build, open the app, read
