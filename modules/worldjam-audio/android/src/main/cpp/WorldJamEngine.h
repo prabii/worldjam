@@ -127,7 +127,6 @@ private:
 
     std::atomic<bool> mMetronomeOn{false};
     std::atomic<double> mMetronomeBpm{90.0};
-    int64_t mMetronomePhase{0};
 
     int mStreamSampleRate{kSampleRate};
     int mBurstFrames{0};

@@ -19,7 +19,9 @@
       "expo-dev-client",
       [
         "expo-camera",
-        { "cameraPermission": "WorldJam uses the camera to place sound objects in your room." }
+        {
+          "cameraPermission": "WorldJam uses the camera to place sound objects in your room."
+        }
       ],
       [
         "expo-build-properties",
@@ -27,11 +29,19 @@
           "android": {
             "minSdkVersion": 26,
             "compileSdkVersion": 35,
-            "targetSdkVersion": 35
+            "targetSdkVersion": 35,
+            "extraProguardRules": "",
+            "packagingOptions": {
+              "pickFirst": [
+                "**/libc++_shared.so"
+              ]
+            }
           }
         }
       ]
     ],
-    "experiments": { "typedRoutes": false }
+    "experiments": {
+      "typedRoutes": false
+    }
   }
 }

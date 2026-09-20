@@ -1,27 +1,39 @@
 apply plugin: 'com.android.library'
-apply plugin: 'kotlin-android'
 
 group = 'com.worldjam.audio'
 version = '0.1.0'
 
+// Matches how the first-party Expo modules wire themselves up; this brings in
+// the Kotlin plugin, the expo-modules-core dependency and the shared SDK
+// versions.
+def expoModulesCorePlugin = new File(
+  project(":expo-modules-core").projectDir.absolutePath,
+  "ExpoModulesCorePlugin.gradle"
+)
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+
 android {
   namespace 'com.worldjam.audio'
-  compileSdk 35
 
   defaultConfig {
-    minSdk 26
-    consumerProguardFiles 'proguard-rules.pro'
+    minSdkVersion 26
+    versionCode 1
+    versionName '0.1.0'
 
     externalNativeBuild {
       cmake {
-        // Oboe requires C++17; shared STL keeps the .so small.
+        // Oboe needs C++17; the shared STL keeps the .so small.
         arguments '-DANDROID_STL=c++_shared', '-DCMAKE_BUILD_TYPE=Release'
         cppFlags '-std=c++17 -O3'
       }
     }
 
     ndk {
-      // 64-bit only: the iQOO 15 is arm64, and dropping armeabi halves build time.
+      // 64-bit only: the loaner is arm64, and dropping the other ABIs roughly
+      // halves both build time and peak memory.
       abiFilters 'arm64-v8a'
     }
   }
@@ -33,19 +45,17 @@ android {
     }
   }
 
-  buildFeatures { prefab true }
-
-  compileOptions {
-    sourceCompatibility JavaVersion.VERSION_17
-    targetCompatibility JavaVersion.VERSION_17
+  // Oboe ships as a prefab AAR; without this the CMake find_package fails.
+  buildFeatures {
+    prefab true
   }
-  kotlinOptions { jvmTarget = '17' }
+
+  packagingOptions {
+    // expo-modules-core also ships libc++_shared; keep one copy.
+    pickFirst '**/libc++_shared.so'
+  }
 }
 
-apply from: project(':expo-modules-core').file('expo-module-gradle-plugin/ExpoModuleGradlePlugin.gradle')
-
 dependencies {
-  implementation project(':expo-modules-core')
-  implementation "org.jetbrains.kotlin:kotlin-stdlib:$kotlinVersion"
   implementation 'com.google.oboe:oboe:1.9.0'
 }

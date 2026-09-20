@@ -10,6 +10,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { CaptureButton } from '@/components/CaptureButton';
 import { LatencyBadge } from '@/components/LatencyBadge';
+import { MixerPanel } from '@/components/MixerPanel';
 import { QuantizePanel } from '@/components/QuantizePanel';
 import { RhythmGuide } from '@/components/RhythmGuide';
 import { SoundObjectCard } from '@/components/SoundObjectCard';
@@ -149,6 +150,16 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
             </View>
           )}
         </View>
+
+        {s.objects.length > 0 && (
+          <View style={styles.sectionPad}>
+            <MixerPanel
+              objects={s.objects}
+              onVolumeChange={s.setObjectVolume}
+              onRemove={s.removeObject}
+            />
+          </View>
+        )}
 
         {s.loops.length > 0 && (
           <View style={styles.sectionPad}>
