@@ -38,7 +38,9 @@
             }
           }
         }
-      ]
+      ],
+      "./plugins/withKotlinPin",
+      "./plugins/withBuildTuning"
     ],
     "experiments": {
       "typedRoutes": false
