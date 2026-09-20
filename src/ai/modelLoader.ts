@@ -73,6 +73,37 @@ const CANDIDATE_NAMES = [
  * user who renamed the file should not be told there is no model.
  */
 export async function findModel(): Promise<{ path: string; sizeMb: number } | null> {
+  // The app's own document directory first. Android 13+ scoped storage blocks
+  // reads of non-media files on shared storage even WITH
+  // READ_EXTERNAL_STORAGE granted, so a model anywhere else may be visible to
+  // adb yet unreadable to the app. Private storage always works.
+  const privateDir = FileSystem.documentDirectory;
+  if (privateDir) {
+    for (const name of CANDIDATE_NAMES) {
+      try {
+        const info = await FileSystem.getInfoAsync(`${privateDir}${name}`);
+        if (info.exists && !info.isDirectory) {
+          return { path: info.uri.replace('file://', ''), sizeMb: fileSizeMb(info) };
+        }
+      } catch {
+        // try the next candidate
+      }
+    }
+    try {
+      const entries = await FileSystem.readDirectoryAsync(privateDir);
+      const gguf = entries.find((e) => e.toLowerCase().endsWith('.gguf'));
+      if (gguf) {
+        const info = await FileSystem.getInfoAsync(`${privateDir}${gguf}`);
+        return {
+          path: `${privateDir}${gguf}`.replace('file://', ''),
+          sizeMb: fileSizeMb(info),
+        };
+      }
+    } catch {
+      // not listable; fall through
+    }
+  }
+
   for (const dir of MODEL_SEARCH_PATHS) {
     // Try the known names directly first; listing a directory can fail under
     // scoped storage even when a direct read of a file in it succeeds.
