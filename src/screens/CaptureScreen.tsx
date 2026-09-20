@@ -15,6 +15,9 @@ import { CaptureButton } from '@/components/CaptureButton';
 import { LatencyBadge } from '@/components/LatencyBadge';
 import { ObjectIcon } from '@/components/ObjectIcon';
 import { Waveform } from '@/components/Waveform';
+import { useArTracking } from '@/hooks/useArTracking';
+import { describeScene } from '@/audio/guidance';
+import { speakNow } from '@/audio/speech';
 import { useSession } from '@/state/sessionStore';
 import type { ObjectCategory } from '@/types';
 import { colors, radius, spacing, type } from '@/theme';
@@ -58,11 +61,17 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
   const finishCapture = useSession((s) => s.finishCapture);
   const playObject = useSession((s) => s.playObject);
   const removeObject = useSession((s) => s.removeObject);
+  const guidanceOn = useSession((s) => s.guidanceOn);
+  const setGuidance = useSession((s) => s.setGuidance);
 
   const usedLabels = useMemo(
     () => new Set(objects.map((o) => o.label.toLowerCase())),
     [objects],
   );
+
+  // AR runs only while the camera is showing; there is nothing to anchor to
+  // otherwise, and an idle ARCore session costs battery and CPU.
+  const ar = useArTracking(cameraOn && !!permission?.granted, stage.width, stage.height);
 
   const onStageLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
@@ -101,10 +110,25 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
   }, [beginCapture, category, label, objects.length, usedLabels]);
 
   const handleFinish = useCallback(async () => {
+    const spot = nextSpot.current;
+    const before = new Set(useSession.getState().objects.map((o) => o.id));
+
     await finishCapture();
+
+    // Anchor the newly captured object to the real-world point that was
+    // tapped, so it stays on the physical object as the phone moves.
+    if (spot && ar.supported && ar.tracking && stage.width > 0) {
+      const added = useSession
+        .getState()
+        .objects.find((o) => !before.has(o.id));
+      if (added) {
+        ar.createAnchor(added.id, spot.x * stage.width, spot.y * stage.height);
+      }
+    }
+
     nextSpot.current = null;
     setMarker(null);
-  }, [finishCapture]);
+  }, [ar, finishCapture, stage]);
 
   const isRecording = recording?.kind === 'object';
   const cameraDenied = permission != null && !permission.granted;
@@ -123,17 +147,35 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
         <View style={[StyleSheet.absoluteFill, styles.scrim]} pointerEvents="none" />
 
         {stage.width > 0 &&
-          objects.map((o) => (
-            <ARObjectLabel
-              key={o.id}
-              object={o}
-              pcm={pcmBySlot.get(o.slot) ?? null}
-              containerWidth={stage.width}
-              containerHeight={stage.height}
-              onTrigger={playObject}
-              onLongPress={removeObject}
-            />
-          ))}
+          objects.map((o) => {
+            // When ARCore is tracking this object, its screen position comes
+            // from the world anchor rather than the stored 2D spot, so the
+            // label stays on the physical object.
+            const tracked = ar.anchors.get(o.id);
+            if (tracked && !tracked.visible) return null;
+
+            const positioned = tracked
+              ? {
+                  ...o,
+                  position: {
+                    x: tracked.screenX / stage.width,
+                    y: tracked.screenY / stage.height,
+                  },
+                }
+              : o;
+
+            return (
+              <ARObjectLabel
+                key={o.id}
+                object={positioned}
+                pcm={pcmBySlot.get(o.slot) ?? null}
+                containerWidth={stage.width}
+                containerHeight={stage.height}
+                onTrigger={playObject}
+                onLongPress={removeObject}
+              />
+            );
+          })}
 
         {marker && stage.width > 0 && (
           <View
@@ -162,6 +204,43 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
           <Text style={styles.brandText}>WorldJam</Text>
         </View>
         <LatencyBadge compact />
+      </View>
+
+      {/* --- AR + guidance status --- */}
+      <View style={styles.badgeRow} pointerEvents="box-none">
+        <View style={styles.arBadge}>
+          <View
+            style={[
+              styles.arDot,
+              {
+                backgroundColor: ar.tracking
+                  ? colors.live
+                  : ar.supported
+                    ? colors.warn
+                    : colors.textFaint,
+              },
+            ]}
+          />
+          <Text style={styles.arText}>
+            {ar.tracking
+              ? 'AR locked'
+              : ar.supported
+                ? 'Move phone to scan'
+                : '2D mode'}
+          </Text>
+        </View>
+
+        <Pressable
+          onPress={() => setGuidance(!guidanceOn)}
+          accessibilityRole="switch"
+          accessibilityState={{ checked: guidanceOn }}
+          accessibilityLabel="Voice guidance"
+          style={[styles.arBadge, guidanceOn && styles.arBadgeOn]}
+        >
+          <Text style={[styles.arText, guidanceOn && { color: colors.vibe }]}>
+            {guidanceOn ? '🔊 Voice on' : '🔈 Voice off'}
+          </Text>
+        </Pressable>
       </View>
 
       {/* --- status line --- */}
@@ -288,6 +367,39 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
           </ScrollView>
         )}
 
+        {guidanceOn && (
+          <Pressable
+            onPress={() => {
+              // Screen-space positions stand in for world coordinates when AR
+              // is not tracking: direction is still broadly right, which is
+              // what the description needs.
+              const positions = new Map(
+                objects.map((o) => {
+                  const a = ar.anchors.get(o.id);
+                  return [
+                    o.id,
+                    a
+                      ? { x: a.screenX / Math.max(1, stage.width) * 4 - 2, y: 0, z: -a.distance }
+                      : { x: o.position.x * 4 - 2, y: 0, z: -1.5 },
+                  ] as const;
+                }),
+              );
+              speakNow(
+                describeScene(
+                  objects,
+                  positions as Map<string, { x: number; y: number; z: number }>,
+                  ar.pose ?? { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+                ),
+              );
+            }}
+            accessibilityRole="button"
+            accessibilityLabel="Describe what is around me"
+            style={styles.describeButton}
+          >
+            <Text style={styles.describeText}>What's around me?</Text>
+          </Pressable>
+        )}
+
         <Pressable onPress={() => setCameraOn((v) => !v)} style={styles.cameraToggle}>
           <Text style={styles.cameraToggleText}>
             {cameraOn ? 'Hide camera' : 'Show camera'}
@@ -325,6 +437,26 @@ const styles = StyleSheet.create({
   brandBar: { width: 3, borderRadius: 2, backgroundColor: colors.vibe },
   brandText: { ...type.title, color: colors.text },
 
+  badgeRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  arBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 5,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(10,12,16,0.82)',
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  arBadgeOn: { borderColor: colors.vibe, backgroundColor: colors.vibeDim },
+  arDot: { width: 6, height: 6, borderRadius: 3 },
+  arText: { ...type.caption, fontSize: 10, color: colors.textDim },
   statusWrap: { alignItems: 'center', marginTop: spacing.md },
   statusPill: {
     flexDirection: 'row',
@@ -417,6 +549,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
   },
 
+  describeButton: {
+    alignSelf: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.vibe,
+    backgroundColor: colors.vibeDim,
+  },
+  describeText: { ...type.label, color: colors.vibe },
   cameraToggle: { alignSelf: 'center' },
   cameraToggleText: { ...type.caption, color: colors.textFaint },
 });
