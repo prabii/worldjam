@@ -23,6 +23,27 @@ export interface WorldJamAudioNative {
   bufferFrames(): number;
   setMasterGain(gain: number): void;
   setMetronome(on: boolean, bpm: number): void;
+
+  // --- ARCore world tracking -------------------------------------------
+  // All of these are safe to call on devices without ARCore; they report
+  // failure rather than throwing, so AR stays a removable layer.
+
+  arSupported(): boolean;
+  /** Creates the AR session. Returns false when unavailable. */
+  arStart(): boolean;
+  arResume(): boolean;
+  arPause(): void;
+  arStop(): void;
+  arIsTracking(): boolean;
+  arLastError(): string | null;
+  arSetDisplayGeometry(rotation: number, width: number, height: number): void;
+  /** Pins an object to the real-world surface under a screen point. */
+  arCreateAnchor(id: string, screenX: number, screenY: number): boolean;
+  arRemoveAnchor(id: string): void;
+  /** Flat [id, x, y, distance, visible] per anchor, for the current frame. */
+  arProjectAnchors(width: number, height: number): Array<string | number>;
+  /** [tx, ty, tz, qx, qy, qz, qw], or [] when not tracking. */
+  arCameraPose(): number[];
 }
 
 const native = requireOptionalNativeModule<WorldJamAudioNative>('WorldJamAudio');
@@ -50,6 +71,19 @@ const stub: WorldJamAudioNative = {
   bufferFrames: () => 0,
   setMasterGain: () => {},
   setMetronome: () => {},
+
+  arSupported: () => false,
+  arStart: () => false,
+  arResume: () => false,
+  arPause: () => {},
+  arStop: () => {},
+  arIsTracking: () => false,
+  arLastError: () => 'native module not loaded',
+  arSetDisplayGeometry: () => {},
+  arCreateAnchor: () => false,
+  arRemoveAnchor: () => {},
+  arProjectAnchors: () => [],
+  arCameraPose: () => [],
 };
 
 export const WorldJamAudio: WorldJamAudioNative = native ?? stub;

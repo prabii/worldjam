@@ -1,9 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { PermissionsAndroid, Platform, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useKeepAwake } from 'expo-keep-awake';
-import { Audio } from 'expo-av';
 import { CaptureScreen } from '@/screens/CaptureScreen';
 import { JamScreen } from '@/screens/JamScreen';
 import { nativeAvailable, startEngine, stopEngine } from '@/audio/engine';
@@ -25,8 +24,19 @@ export default function App() {
     (async () => {
       try {
         // The native engine opens its own Oboe streams, but Android still
-        // requires the runtime RECORD_AUDIO grant, which expo-av asks for.
-        const { granted } = await Audio.requestPermissionsAsync();
+        // requires the runtime RECORD_AUDIO grant. Asked for directly rather
+        // than through expo-av, which drags in expo-asset and its native
+        // module for no benefit here.
+        const granted =
+          Platform.OS !== 'android' ||
+          (await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.RECORD_AUDIO,
+            {
+              title: 'Microphone access',
+              message: 'WorldJam records the real sound of objects around you.',
+              buttonPositive: 'Allow',
+            },
+          )) === PermissionsAndroid.RESULTS.GRANTED;
         if (cancelled) return;
         if (!granted) {
           setEngineError('Microphone permission denied — capture will not work.');

@@ -28,6 +28,7 @@ import { encodeWav, mixSession, toBase64 } from '@/audio/render';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { planToLoopEvents, transport } from '@/audio/transport';
+import { cleanCapture } from '@/dsp/denoise';
 import {
   detectKey,
   detectOnsets,
@@ -213,7 +214,10 @@ export const useSession = create<SessionState>((set, get) => ({
     }
 
     // --- object capture ---
-    const { pcm } = trimSilence(raw, sr);
+    // Gate to the hit and subtract the room before anything else: analysis
+    // and playback should both see the object, not the fan in the corner.
+    const cleaned = cleanCapture(raw, sr);
+    const { pcm } = trimSilence(cleaned.pcm, sr);
     const features = extractFeatures(pcm, sr);
     const role = inferRole(features);
 
@@ -247,7 +251,9 @@ export const useSession = create<SessionState>((set, get) => ({
     set({
       objects: [...state.objects, obj],
       lastExportPath: null,
-      statusMessage: `${target.label} captured → ${role}`,
+      statusMessage: cleaned.gated
+        ? `${target.label} → ${role} · noise −${cleaned.noiseReducedDb.toFixed(0)}dB`
+        : `${target.label} → ${role}`,
     });
 
     // Confirm the capture by playing it back immediately: the user hears their

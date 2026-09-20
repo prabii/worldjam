@@ -58,4 +58,8 @@ android {
 
 dependencies {
   implementation 'com.google.oboe:oboe:1.9.0'
+  // ARCore for world-anchored sound objects. Optional at runtime: the manifest
+  // marks AR as "optional" and ArSessionManager degrades to the 2D placement
+  // path on devices without it (HLD v2 SS2 - AR is a removable layer).
+  implementation 'com.google.ar:core:1.45.0'
 }

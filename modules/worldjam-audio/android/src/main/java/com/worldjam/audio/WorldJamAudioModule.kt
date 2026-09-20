@@ -29,6 +29,16 @@ class WorldJamAudioModule : Module() {
     private external fun nativeSetMasterGain(gain: Float)
     private external fun nativeSetMetronome(on: Boolean, bpm: Double)
 
+    /**
+     * Created lazily: constructing it eagerly would load ARCore classes on
+     * every device, including ones that do not have it.
+     */
+    private var ar: ArSessionManager? = null
+
+    private fun arManager(): ArSessionManager {
+        return ar ?: ArSessionManager(appContext.reactContext!!).also { ar = it }
+    }
+
     companion object {
         init {
             System.loadLibrary("worldjam_audio")
@@ -74,6 +84,53 @@ class WorldJamAudioModule : Module() {
         Function("setMasterGain") { gain: Float -> nativeSetMasterGain(gain) }
         Function("setMetronome") { on: Boolean, bpm: Double -> nativeSetMetronome(on, bpm) }
 
-        OnDestroy { nativeStop() }
+        // --- ARCore: world-anchored sound objects ---------------------------
+        // Every function degrades rather than throws, so a device without
+        // ARCore keeps the full audio experience and simply loses the 3D
+        // layer (HLD v2 §2: AR is removable).
+
+        Function("arSupported") {
+            arManager().isSupported()
+        }
+
+        Function("arStart") {
+            arManager().start(appContext.activityProvider?.currentActivity)
+        }
+
+        Function("arResume") { arManager().resume() }
+        Function("arPause") { arManager().pause() }
+        Function("arStop") { arManager().stop() }
+
+        Function("arIsTracking") { ar?.tracking ?: false }
+        Function("arLastError") { ar?.lastError }
+
+        Function("arSetDisplayGeometry") { rotation: Int, width: Int, height: Int ->
+            ar?.setDisplayGeometry(rotation, width, height)
+        }
+
+        /** Pins an object to the real-world point under a screen tap. */
+        Function("arCreateAnchor") { id: String, screenX: Float, screenY: Float ->
+            ar?.createAnchorAt(id, screenX, screenY) ?: false
+        }
+
+        Function("arRemoveAnchor") { id: String -> ar?.removeAnchor(id) }
+
+        /**
+         * Screen positions for every anchor this frame, as a flat array of
+         * [id, x, y, distance, visible] — flat to keep the per-frame bridge
+         * cost low, since JS polls this at display rate.
+         */
+        Function("arProjectAnchors") { width: Int, height: Int ->
+            ar?.projectAnchors(width, height) ?: emptyList<Any>()
+        }
+
+        /** [tx, ty, tz, qx, qy, qz, qw] — drives head-tracked spatial audio. */
+        Function("arCameraPose") { ar?.cameraPose() ?: emptyList<Double>() }
+
+        OnDestroy {
+            ar?.stop()
+            ar = null
+            nativeStop()
+        }
     }
 }

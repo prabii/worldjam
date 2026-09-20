@@ -1,4 +1,13 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
   <uses-permission android:name="android.permission.RECORD_AUDIO" />
   <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+  <uses-permission android:name="android.permission.CAMERA" />
+
+  <!-- "optional" (not "required") so the app still installs and runs on
+       devices without ARCore; the AR layer simply stays off. -->
+  <uses-feature android:name="android.hardware.camera.ar" android:required="false" />
+
+  <application>
+    <meta-data android:name="com.google.ar.core" android:value="optional" />
+  </application>
 </manifest>
