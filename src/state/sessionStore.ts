@@ -101,6 +101,8 @@ interface SessionState {
   finishCapture: () => Promise<void>;
   cancelCapture: () => void;
   removeObject: (id: string) => void;
+  /** Names an object after its sound has been captured. */
+  renameObject: (id: string, label: string) => void;
   playObject: (id: string) => void;
   setObjectVolume: (id: string, volume: number) => void;
   arrange: (instruction?: string) => Promise<void>;
@@ -297,6 +299,27 @@ export const useSession = create<SessionState>((set, get) => ({
     }));
   },
 
+  renameObject: (id, label) => {
+    const trimmed = label.trim();
+    if (!trimmed) return;
+
+    // Keep labels unique: the AI addresses objects by name, so two "Mug"s
+    // would make an arrangement ambiguous.
+    const taken = new Set(
+      get()
+        .objects.filter((o) => o.id !== id)
+        .map((o) => o.label.toLowerCase()),
+    );
+    let unique = trimmed;
+    let n = 2;
+    while (taken.has(unique.toLowerCase())) unique = `${trimmed} ${n++}`;
+
+    set((s) => ({
+      objects: s.objects.map((o) => (o.id === id ? { ...o, label: unique } : o)),
+      lastExportPath: null,
+    }));
+  },
+
   playObject: (id) => {
     const state = get();
     const obj = state.objects.find((o) => o.id === id);
@@ -357,18 +380,31 @@ export const useSession = create<SessionState>((set, get) => ({
 
   applyStyle: async (style) => {
     const state = get();
-    set({ style });
 
-    if (state.objects.length === 0) return;
+    // Paint the selection immediately. applyPlan() below synthesises several
+    // seconds of accompaniment PCM, which is hundreds of thousands of samples
+    // on the JS thread; without this the button appears frozen until it ends.
+    set({ style, arranging: true, statusMessage: `Switching to ${style}…` });
 
-    // Restyle locally first so the change is instant, then let the model
-    // refine it. The user never waits to hear the new feel.
+    if (state.objects.length === 0) {
+      set({ arranging: false });
+      return;
+    }
+
+    // Yield twice so React commits the highlighted chip and the spinner
+    // before the synchronous render begins. One frame is not always enough
+    // on a loaded device.
+    await new Promise((r) => setTimeout(r, 0));
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+
     const immediate = state.plan
       ? restylePlan(state.plan, state.objects, style)
       : buildFallbackPlan(state.objects, style);
     applyPlan(immediate, set, get);
-    set({ statusMessage: `${style} · ${immediate.bpm} BPM` });
+    set({ arranging: false, statusMessage: `${style} · ${immediate.bpm} BPM` });
 
+    // Let the model refine it afterwards; the rule-based feel is already
+    // playing, so this never blocks the user.
     await get().arrange(`make it ${style}`);
   },
 
@@ -617,11 +653,21 @@ function applyPlan(
     layerEvents.push({ objectId: `layer:${layer}`, beat: 0, velocity: 1 });
   }
 
+  // The vocal take plays at the top of every loop, so the user hears their
+  // own voice blended with the objects and accompaniment rather than only
+  // once when the arrangement was made.
+  const vocalEvents: LoopEvent[] =
+    state.vocalTake && !state.vocalTake.muted && plan.voiceRole !== 'none'
+      ? [{ objectId: 'vocal', beat: 0, velocity: 1 }]
+      : [];
+
   const planLoop: Loop = {
     id: PLAN_LOOP_ID,
     name: 'AI arrangement',
     // Built once, fully formed, and sorted — the scheduler walks these in order.
-    events: [...objectEvents, ...layerEvents].sort((a, b) => a.beat - b.beat),
+    events: [...objectEvents, ...layerEvents, ...vocalEvents].sort(
+      (a, b) => a.beat - b.beat,
+    ),
     bars: plan.bars,
     muted: false,
     createdAt: Date.now(),
@@ -630,10 +676,21 @@ function applyPlan(
   const loops = upsertLoop(state.loops, planLoop);
 
   transport.setResolver((objectId) => {
+    if (objectId === 'vocal') {
+      const take = get().vocalTake;
+      // Centre-panned and slightly forward: the voice is the lead, and
+      // panning it would make it fight the objects for space.
+      return take && !take.muted ? { slot: take.slot, gain: 1.0, pan: 0.5 } : null;
+    }
     if (objectId.startsWith('layer:')) {
       const layer = objectId.slice(6) as keyof typeof LAYER_SLOTS;
       const slot = LAYER_SLOTS[layer];
-      return slot != null ? { slot, gain: 0.8, pan: 0.5 } : null;
+      if (slot == null) return null;
+      // Duck the synthesised accompaniment when a vocal is in the mix. A
+      // phone-mic voice has far less level than a synth, and at equal gain
+      // the backing simply buries it.
+      const hasVocal = get().vocalTake != null && !get().vocalTake?.muted;
+      return { slot, gain: hasVocal ? 0.45 : 0.8, pan: 0.5 };
     }
     const obj = get().objects.find((o) => o.id === objectId);
     return obj ? { slot: obj.slot, gain: obj.volume, pan: obj.pan } : null;

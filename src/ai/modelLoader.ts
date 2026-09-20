@@ -193,10 +193,12 @@ export function describeStatus(s: ModelStatus): string {
       return 'Looking for model…';
     case 'loading':
       return `Loading model (${s.sizeMb} MB)…`;
-    case 'ready':
-      return `Gemma ready · ${(s.loadMs / 1000).toFixed(1)}s`;
+    case 'ready': {
+      const file = s.path.split('/').pop() ?? s.path;
+      return `Gemma ready · ${file} · ${(s.loadMs / 1000).toFixed(1)}s`;
+    }
     case 'absent':
-      return 'No model — using rule-based arranger';
+      return 'No model found — using rule-based arranger';
     case 'error':
       return s.message;
   }

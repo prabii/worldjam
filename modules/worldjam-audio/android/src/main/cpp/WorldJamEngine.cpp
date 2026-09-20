@@ -30,13 +30,26 @@ bool WorldJamEngine::openPlaybackStream() {
         ->setSharingMode(oboe::SharingMode::Exclusive)
         ->setFormat(oboe::AudioFormat::Float)
         ->setChannelCount(kChannelCount)
-        ->setSampleRate(kSampleRate)
-        ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
+        // Deliberately NOT calling setSampleRate(): forcing 48000 when the
+        // device prefers something else inserts a resampler and pushes the
+        // stream into shared mode. Measured on a MediaTek MT6878, forcing the
+        // rate produced burst=770 (~16 ms) and exclusive=0.
         ->setUsage(oboe::Usage::Game)
         ->setDataCallback(this)
         ->setErrorCallback(this);
 
     oboe::Result result = builder.openStream(mPlayStream);
+
+    // Exclusive mode is not always grantable. Rather than silently accepting
+    // whatever we get, retry explicitly in shared mode so the fallback is
+    // visible in the log and intentional in the code.
+    if (result != oboe::Result::OK) {
+        LOGE("Exclusive stream failed (%s), retrying shared",
+             oboe::convertToText(result));
+        builder.setSharingMode(oboe::SharingMode::Shared);
+        result = builder.openStream(mPlayStream);
+    }
+
     if (result != oboe::Result::OK) {
         LOGE("Failed to open playback stream: %s", oboe::convertToText(result));
         return false;
@@ -45,9 +58,13 @@ bool WorldJamEngine::openPlaybackStream() {
     mStreamSampleRate = mPlayStream->getSampleRate();
     mBurstFrames = mPlayStream->getFramesPerBurst();
 
-    // Two bursts is the standard low-latency compromise: enough slack to avoid
-    // glitching, small enough to stay well inside the 50 ms budget.
-    mPlayStream->setBufferSizeInFrames(mBurstFrames * 2);
+    // Start at one burst - the tightest the device will accept - and let
+    // Oboe grow it only if underruns actually occur. Two bursts was costing
+    // ~32 ms on a device with a 770-frame burst, which alone blows the budget.
+    auto bufResult = mPlayStream->setBufferSizeInFrames(mBurstFrames);
+    if (!bufResult) {
+        mPlayStream->setBufferSizeInFrames(mBurstFrames * 2);
+    }
 
     result = mPlayStream->requestStart();
     if (result != oboe::Result::OK) {
@@ -55,9 +72,11 @@ bool WorldJamEngine::openPlaybackStream() {
         return false;
     }
 
-    LOGI("Playback stream open: rate=%d burst=%d buffer=%d exclusive=%d",
+    auto lat = mPlayStream->calculateLatencyMillis();
+    LOGI("Playback stream open: rate=%d burst=%d buffer=%d exclusive=%d latency=%.1fms",
          mStreamSampleRate, mBurstFrames, mPlayStream->getBufferSizeInFrames(),
-         mPlayStream->getSharingMode() == oboe::SharingMode::Exclusive);
+         mPlayStream->getSharingMode() == oboe::SharingMode::Exclusive,
+         lat ? lat.value() : -1.0);
     return true;
 }
 

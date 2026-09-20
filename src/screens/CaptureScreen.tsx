@@ -1,6 +1,9 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Animated,
+  Easing,
   LayoutChangeEvent,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -10,46 +13,36 @@ import {
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
 import { ARObjectLabel } from '@/components/ARObjectLabel';
-import { CaptureButton } from '@/components/CaptureButton';
 import { LatencyBadge } from '@/components/LatencyBadge';
-import { ObjectIcon } from '@/components/ObjectIcon';
 import { Waveform } from '@/components/Waveform';
 import { useArTracking } from '@/hooks/useArTracking';
 import { describeScene } from '@/audio/guidance';
 import { speakNow } from '@/audio/speech';
 import { useSession } from '@/state/sessionStore';
-import type { ObjectCategory } from '@/types';
 import { colors, radius, spacing, type } from '@/theme';
 
 /**
- * Quick-pick object types, matching the objects shown in the mockups.
+ * Capture screen — panels 1 and 2 of the product mockups.
  *
- * Object *detection* is explicitly cosmetic per HLD v2 §2 — "you do not need
- * AI to know it is a mug to sample its sound" — so this is a picker plus free
- * text, not a classifier. It costs nothing and never misidentifies anything.
+ * Record-first: point at a thing, hold to record, strike it, then name it.
+ * There is deliberately no list of preset object types, because offering
+ * "Mug / Laptop / Keys" before any audio exists reads as though the app ships
+ * with those instruments — the opposite of the product's promise that every
+ * sound is one you recorded.
  */
-const SUGGESTIONS: Array<{ label: string; category: ObjectCategory }> = [
-  { label: 'Mug', category: 'cup' },
-  { label: 'Table', category: 'table' },
-  { label: 'Keys', category: 'keys' },
-  { label: 'Bottle', category: 'bottle' },
-  { label: 'Laptop', category: 'laptop' },
-  { label: 'Plant', category: 'plant' },
-  { label: 'Glass', category: 'glass' },
-  { label: 'Clap', category: 'clap' },
-];
-
 export function CaptureScreen({ onDone }: { onDone: () => void }) {
   const insets = useSafeAreaInsets();
   const [permission, requestPermission] = useCameraPermissions();
-  const [label, setLabel] = useState('Mug');
-  const [category, setCategory] = useState<ObjectCategory>('cup');
-  const [cameraOn, setCameraOn] = useState(true);
   const [stage, setStage] = useState({ width: 0, height: 0 });
+  const [elapsed, setElapsed] = useState(0);
 
-  // Where the next capture anchors. Set by tapping the camera view, so
-  // objects land where the user pointed rather than in a preset grid.
+  /** Set after a capture, while the user names it. */
+  const [naming, setNaming] = useState<{ id: string } | null>(null);
+  const [nameDraft, setNameDraft] = useState('');
+
+  // Where the next capture anchors — set by tapping the camera view.
   const nextSpot = useRef<{ x: number; y: number } | null>(null);
   const [marker, setMarker] = useState<{ x: number; y: number } | null>(null);
 
@@ -61,17 +54,24 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
   const finishCapture = useSession((s) => s.finishCapture);
   const playObject = useSession((s) => s.playObject);
   const removeObject = useSession((s) => s.removeObject);
+  const renameObject = useSession((s) => s.renameObject);
   const guidanceOn = useSession((s) => s.guidanceOn);
   const setGuidance = useSession((s) => s.setGuidance);
 
-  const usedLabels = useMemo(
-    () => new Set(objects.map((o) => o.label.toLowerCase())),
-    [objects],
-  );
+  const ar = useArTracking(!!permission?.granted, stage.width, stage.height);
 
-  // AR runs only while the camera is showing; there is nothing to anchor to
-  // otherwise, and an idle ARCore session costs battery and CPU.
-  const ar = useArTracking(cameraOn && !!permission?.granted, stage.width, stage.height);
+  const isRecording = recording?.kind === 'object';
+
+  // Recording timer, as in panel 2.
+  useEffect(() => {
+    if (!isRecording) {
+      setElapsed(0);
+      return;
+    }
+    const started = Date.now();
+    const id = setInterval(() => setElapsed((Date.now() - started) / 1000), 100);
+    return () => clearInterval(id);
+  }, [isRecording]);
 
   const onStageLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
@@ -80,77 +80,79 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
 
   const handleStagePress = useCallback(
     (e: { nativeEvent: { locationX: number; locationY: number } }) => {
-      if (stage.width === 0) return;
+      if (stage.width === 0 || isRecording) return;
       const x = e.nativeEvent.locationX / stage.width;
       const y = e.nativeEvent.locationY / stage.height;
       nextSpot.current = { x, y };
       setMarker({ x, y });
+      Haptics.selectionAsync().catch(() => {});
     },
-    [stage],
+    [stage, isRecording],
   );
 
-  const handleStart = useCallback(() => {
-    const trimmed = label.trim() || 'Object';
-
-    // Duplicate labels would make the AI's object references ambiguous, so
-    // disambiguate rather than reject the capture.
-    let finalLabel = trimmed;
-    let n = 2;
-    while (usedLabels.has(finalLabel.toLowerCase())) {
-      finalLabel = `${trimmed} ${n++}`;
-    }
-
-    // Fall back to a spread position when nothing was tapped.
+  const handleRecordStart = useCallback(() => {
+    // Auto-position when nothing was tapped, so recording never blocks on a
+    // placement step the user did not know about.
     const spot = nextSpot.current ?? {
       x: 0.2 + ((objects.length * 0.27) % 0.6),
-      y: 0.25 + ((objects.length * 0.19) % 0.45),
+      y: 0.3 + ((objects.length * 0.17) % 0.4),
     };
+    nextSpot.current = spot;
 
-    beginCapture({ kind: 'object', label: finalLabel, category, x: spot.x, y: spot.y });
-  }, [beginCapture, category, label, objects.length, usedLabels]);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+    beginCapture({
+      kind: 'object',
+      // Placeholder only; the user names it after hearing it.
+      label: `Sound ${objects.length + 1}`,
+      category: 'unknown',
+      x: spot.x,
+      y: spot.y,
+    });
+  }, [beginCapture, objects.length]);
 
-  const handleFinish = useCallback(async () => {
+  const handleRecordStop = useCallback(async () => {
     const spot = nextSpot.current;
     const before = new Set(useSession.getState().objects.map((o) => o.id));
 
     await finishCapture();
 
-    // Anchor the newly captured object to the real-world point that was
-    // tapped, so it stays on the physical object as the phone moves.
-    if (spot && ar.supported && ar.tracking && stage.width > 0) {
-      const added = useSession
-        .getState()
-        .objects.find((o) => !before.has(o.id));
-      if (added) {
+    const added = useSession.getState().objects.find((o) => !before.has(o.id));
+    if (added) {
+      if (spot && ar.supported && ar.tracking && stage.width > 0) {
         ar.createAnchor(added.id, spot.x * stage.width, spot.y * stage.height);
       }
+      // Name it now that there is a sound to name.
+      setNameDraft('');
+      setNaming({ id: added.id });
     }
 
     nextSpot.current = null;
     setMarker(null);
   }, [ar, finishCapture, stage]);
 
-  const isRecording = recording?.kind === 'object';
+  const commitName = useCallback(() => {
+    if (!naming) return;
+    const name = nameDraft.trim();
+    if (name) renameObject(naming.id, name);
+    setNaming(null);
+    setNameDraft('');
+  }, [naming, nameDraft, renameObject]);
+
+  const lastObject = objects[objects.length - 1];
   const cameraDenied = permission != null && !permission.granted;
 
   return (
     <View style={styles.root}>
-      {/* --- camera stage with AR anchors --- */}
+      {/* --- camera stage --- */}
       <Pressable style={styles.stage} onPress={handleStagePress} onLayout={onStageLayout}>
-        {cameraOn && permission?.granted ? (
+        {permission?.granted ? (
           <CameraView style={StyleSheet.absoluteFill} facing="back" />
         ) : (
           <View style={[StyleSheet.absoluteFill, styles.noCamera]} />
         )}
 
-        {/* Only a light scrim: the mockups let the room show through. */}
-        <View style={[StyleSheet.absoluteFill, styles.scrim]} pointerEvents="none" />
-
         {stage.width > 0 &&
           objects.map((o) => {
-            // When ARCore is tracking this object, its screen position comes
-            // from the world anchor rather than the stored 2D spot, so the
-            // label stays on the physical object.
             const tracked = ar.anchors.get(o.id);
             if (tracked && !tracked.visible) return null;
 
@@ -177,15 +179,12 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
             );
           })}
 
-        {marker && stage.width > 0 && (
+        {marker && stage.width > 0 && !isRecording && (
           <View
             pointerEvents="none"
             style={[
               styles.marker,
-              {
-                left: marker.x * stage.width - 26,
-                top: marker.y * stage.height - 26,
-              },
+              { left: marker.x * stage.width - 30, top: marker.y * stage.height - 30 },
             ]}
           >
             <View style={styles.markerRing} />
@@ -206,12 +205,12 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
         <LatencyBadge compact />
       </View>
 
-      {/* --- AR + guidance status --- */}
+      {/* --- AR + voice badges --- */}
       <View style={styles.badgeRow} pointerEvents="box-none">
-        <View style={styles.arBadge}>
+        <View style={styles.badge}>
           <View
             style={[
-              styles.arDot,
+              styles.badgeDot,
               {
                 backgroundColor: ar.tracking
                   ? colors.live
@@ -221,12 +220,8 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
               },
             ]}
           />
-          <Text style={styles.arText}>
-            {ar.tracking
-              ? 'AR locked'
-              : ar.supported
-                ? 'Move phone to scan'
-                : '2D mode'}
+          <Text style={styles.badgeText}>
+            {ar.tracking ? 'AR locked' : ar.supported ? 'Move to scan' : '2D mode'}
           </Text>
         </View>
 
@@ -235,110 +230,78 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
           accessibilityRole="switch"
           accessibilityState={{ checked: guidanceOn }}
           accessibilityLabel="Voice guidance"
-          style={[styles.arBadge, guidanceOn && styles.arBadgeOn]}
+          style={[styles.badge, guidanceOn && styles.badgeOn]}
         >
-          <Text style={[styles.arText, guidanceOn && { color: colors.vibe }]}>
-            {guidanceOn ? '🔊 Voice on' : '🔈 Voice off'}
+          <Text style={[styles.badgeText, guidanceOn && { color: colors.vibe }]}>
+            {guidanceOn ? 'Voice on' : 'Voice off'}
           </Text>
         </Pressable>
-      </View>
-
-      {/* --- status line --- */}
-      <View style={styles.statusWrap} pointerEvents="none">
-        <View style={styles.statusPill}>
-          <View
-            style={[
-              styles.statusDot,
-              { backgroundColor: isRecording ? colors.accent : colors.live },
-            ]}
-          />
-          <Text style={styles.statusText}>
-            {isRecording
-              ? 'Recording real sound…'
-              : statusMessage ??
-                (objects.length === 0
-                  ? 'Tap where the object is, then hold & hit it'
-                  : `${objects.length} instrument${objects.length === 1 ? '' : 's'} ready`)}
-          </Text>
-        </View>
       </View>
 
       {cameraDenied && (
         <Pressable onPress={requestPermission} style={styles.permission}>
           <Text style={styles.permissionText}>
-            Camera off — tap to enable. Capture still works without it.
+            Camera off — tap to enable. Recording still works without it.
           </Text>
         </Pressable>
       )}
 
-      {/* --- bottom sheet --- */}
-      <View style={[styles.sheet, { paddingBottom: insets.bottom + spacing.lg }]}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.picker}
-        >
-          {SUGGESTIONS.map((s) => {
-            const active = label === s.label;
-            return (
-              <Pressable
-                key={s.label}
-                onPress={() => {
-                  setLabel(s.label);
-                  setCategory(s.category);
-                }}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
-                style={[styles.pick, active && styles.pickActive]}
-              >
-                <ObjectIcon
-                  category={s.category}
-                  color={active ? colors.vibe : colors.textDim}
-                  size={20}
-                />
-                <Text style={[styles.pickText, active && styles.pickTextActive]}>
-                  {s.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </ScrollView>
+      <View style={styles.spacer} />
 
-        <View style={styles.controls}>
-          <TextInput
-            value={label}
-            onChangeText={(t) => {
-              setLabel(t);
-              setCategory('unknown');
-            }}
-            placeholder="Name it"
-            placeholderTextColor={colors.textFaint}
-            style={styles.input}
-            maxLength={14}
-            accessibilityLabel="Object name"
-          />
-
-          <CaptureButton
-            recording={isRecording}
-            label="Hold & hit"
-            hint={marker ? 'placed — now hit it' : 'tap the view first'}
-            onStart={handleStart}
-            onStop={handleFinish}
-          />
-
+      {/* --- recording panel (mockup panel 2) --- */}
+      <View style={[styles.recordPanel, { paddingBottom: insets.bottom + spacing.lg }]}>
+        {isRecording ? (
+          <>
+            <LiveWaveform />
+            <Text style={styles.timer}>{elapsed.toFixed(1)}s</Text>
+            <Text style={styles.recordHint}>Recording real sound…</Text>
+          </>
+        ) : lastObject ? (
           <Pressable
-            onPress={onDone}
-            disabled={objects.length === 0}
+            onPress={() => playObject(lastObject.id)}
             accessibilityRole="button"
-            style={[styles.next, objects.length === 0 && styles.nextDisabled]}
+            accessibilityLabel={`Play ${lastObject.label}`}
+            style={styles.capturedCard}
           >
-            <Text style={[styles.nextText, objects.length === 0 && styles.nextTextDisabled]}>
-              Jam →
+            <Text style={styles.capturedTitle}>Captured!</Text>
+            <View style={styles.capturedRow}>
+              <Waveform
+                pcm={pcmBySlot.get(lastObject.slot) ?? null}
+                width={180}
+                height={32}
+                color={lastObject.color}
+                bars={44}
+              />
+              <View style={styles.playSmall}>
+                <View style={styles.playSmallIcon} />
+              </View>
+            </View>
+            <Text style={styles.capturedSub}>
+              Real sound from your {lastObject.label.toLowerCase()}
             </Text>
           </Pressable>
-        </View>
+        ) : (
+          <Text style={styles.recordHint}>
+            {marker ? 'Placed — now hold to record' : 'Tap where the object is'}
+          </Text>
+        )}
 
-        {/* Captured strip — panel 2's "Captured!" confirmation. */}
+        <Pressable
+          onPressIn={handleRecordStart}
+          onPressOut={handleRecordStop}
+          accessibilityRole="button"
+          accessibilityLabel="Hold to record the object's sound"
+          style={[styles.recordButton, isRecording && styles.recordButtonActive]}
+        >
+          <View style={[styles.recordInner, isRecording && styles.recordInnerActive]} />
+        </Pressable>
+
+        <Text style={styles.recordLabel}>
+          {isRecording ? 'Hit the object now' : 'Hold & hit'}
+        </Text>
+
+        {statusMessage && <Text style={styles.status}>{statusMessage}</Text>}
+
         {objects.length > 0 && (
           <ScrollView
             horizontal
@@ -354,58 +317,149 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
                 accessibilityLabel={`Play ${o.label}`}
                 style={[styles.stripItem, { borderColor: o.color }]}
               >
-                <ObjectIcon category={o.category} color={o.color} size={16} />
+                <Text style={[styles.stripName, { color: o.color }]} numberOfLines={1}>
+                  {o.label}
+                </Text>
                 <Waveform
                   pcm={pcmBySlot.get(o.slot) ?? null}
-                  width={52}
-                  height={18}
+                  width={56}
+                  height={16}
                   color={o.color}
-                  bars={16}
+                  bars={18}
                 />
               </Pressable>
             ))}
           </ScrollView>
         )}
 
-        {guidanceOn && (
-          <Pressable
-            onPress={() => {
-              // Screen-space positions stand in for world coordinates when AR
-              // is not tracking: direction is still broadly right, which is
-              // what the description needs.
-              const positions = new Map(
-                objects.map((o) => {
-                  const a = ar.anchors.get(o.id);
-                  return [
-                    o.id,
-                    a
-                      ? { x: a.screenX / Math.max(1, stage.width) * 4 - 2, y: 0, z: -a.distance }
-                      : { x: o.position.x * 4 - 2, y: 0, z: -1.5 },
-                  ] as const;
-                }),
-              );
-              speakNow(
-                describeScene(
-                  objects,
-                  positions as Map<string, { x: number; y: number; z: number }>,
-                  ar.pose ?? { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
-                ),
-              );
-            }}
-            accessibilityRole="button"
-            accessibilityLabel="Describe what is around me"
-            style={styles.describeButton}
-          >
-            <Text style={styles.describeText}>What's around me?</Text>
-          </Pressable>
-        )}
+        <View style={styles.actionRow}>
+          {guidanceOn && (
+            <Pressable
+              onPress={() => {
+                const positions = new Map(
+                  objects.map((o) => {
+                    const a = ar.anchors.get(o.id);
+                    return [
+                      o.id,
+                      a
+                        ? {
+                            x: (a.screenX / Math.max(1, stage.width)) * 4 - 2,
+                            y: 0,
+                            z: -a.distance,
+                          }
+                        : { x: o.position.x * 4 - 2, y: 0, z: -1.5 },
+                    ] as const;
+                  }),
+                );
+                speakNow(
+                  describeScene(
+                    objects,
+                    positions as Map<string, { x: number; y: number; z: number }>,
+                    ar.pose ?? { x: 0, y: 0, z: 0, qx: 0, qy: 0, qz: 0, qw: 1 },
+                  ),
+                );
+              }}
+              accessibilityRole="button"
+              style={styles.secondaryButton}
+            >
+              <Text style={styles.secondaryText}>What&apos;s around me?</Text>
+            </Pressable>
+          )}
 
-        <Pressable onPress={() => setCameraOn((v) => !v)} style={styles.cameraToggle}>
-          <Text style={styles.cameraToggleText}>
-            {cameraOn ? 'Hide camera' : 'Show camera'}
-          </Text>
-        </Pressable>
+          <Pressable
+            onPress={onDone}
+            disabled={objects.length === 0}
+            accessibilityRole="button"
+            style={[styles.next, objects.length === 0 && styles.nextDisabled]}
+          >
+            <Text style={[styles.nextText, objects.length === 0 && styles.nextTextDisabled]}>
+              {objects.length === 0
+                ? 'Record a sound first'
+                : `${objects.length} instrument${objects.length === 1 ? '' : 's'} ready →`}
+            </Text>
+          </Pressable>
+        </View>
       </View>
+
+      {/* --- name it, after the sound exists --- */}
+      <Modal visible={naming != null} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>What did you just hit?</Text>
+            <Text style={styles.modalSub}>
+              Name it so the AI can call it out in the rhythm.
+            </Text>
+            <TextInput
+              value={nameDraft}
+              onChangeText={setNameDraft}
+              placeholder="Mug, table, keys…"
+              placeholderTextColor={colors.textFaint}
+              style={styles.modalInput}
+              maxLength={16}
+              autoFocus
+              onSubmitEditing={commitName}
+              accessibilityLabel="Object name"
+            />
+            <View style={styles.modalButtons}>
+              <Pressable onPress={() => setNaming(null)} style={styles.modalSkip}>
+                <Text style={styles.modalSkipText}>Skip</Text>
+              </Pressable>
+              <Pressable onPress={commitName} style={styles.modalSave}>
+                <Text style={styles.modalSaveText}>Save</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
+/**
+ * Animated bars during recording.
+ *
+ * Deliberately not driven by real mic levels: reading the input buffer from JS
+ * while the native engine is capturing would mean pulling audio across the
+ * bridge 30 times a second, competing with the very capture it is visualising.
+ * This is an activity indicator and is honest about being one.
+ */
+function LiveWaveform() {
+  const bars = useRef(Array.from({ length: 28 }, () => new Animated.Value(0.2))).current;
+
+  useEffect(() => {
+    const anims = bars.map((v, i) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.timing(v, {
+            toValue: 0.4 + Math.random() * 0.6,
+            duration: 180 + (i % 5) * 40,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: false,
+          }),
+          Animated.timing(v, {
+            toValue: 0.15 + Math.random() * 0.2,
+            duration: 180 + (i % 7) * 40,
+            easing: Easing.inOut(Easing.quad),
+            useNativeDriver: false,
+          }),
+        ]),
+      ),
+    );
+    anims.forEach((a) => a.start());
+    return () => anims.forEach((a) => a.stop());
+  }, [bars]);
+
+  return (
+    <View style={styles.liveWave}>
+      {bars.map((v, i) => (
+        <Animated.View
+          key={i}
+          style={[
+            styles.liveBar,
+            { height: v.interpolate({ inputRange: [0, 1], outputRange: [3, 36] }) },
+          ]}
+        />
+      ))}
     </View>
   );
 }
@@ -414,15 +468,14 @@ const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
   stage: { ...StyleSheet.absoluteFillObject },
   noCamera: { backgroundColor: '#0B0D12' },
-  scrim: { backgroundColor: 'rgba(8,9,12,0.25)' },
 
-  marker: { position: 'absolute', width: 52, height: 52 },
+  marker: { position: 'absolute', width: 60, height: 60 },
   markerRing: {
-    width: 52,
-    height: 52,
-    borderRadius: 26,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     borderWidth: 2,
-    borderColor: colors.vibe,
+    borderColor: colors.accent,
     borderStyle: 'dashed',
   },
 
@@ -443,7 +496,7 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginTop: spacing.sm,
   },
-  arBadge: {
+  badge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
@@ -454,24 +507,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  arBadgeOn: { borderColor: colors.vibe, backgroundColor: colors.vibeDim },
-  arDot: { width: 6, height: 6, borderRadius: 3 },
-  arText: { ...type.caption, fontSize: 10, color: colors.textDim },
-  statusWrap: { alignItems: 'center', marginTop: spacing.md },
-  statusPill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.pill,
-    backgroundColor: 'rgba(10,12,16,0.82)',
-    borderWidth: 1,
-    borderColor: colors.border,
-    maxWidth: '90%',
-  },
-  statusDot: { width: 7, height: 7, borderRadius: 4 },
-  statusText: { ...type.caption, color: colors.text, fontWeight: '600' },
+  badgeOn: { borderColor: colors.vibe, backgroundColor: colors.vibeDim },
+  badgeDot: { width: 6, height: 6, borderRadius: 3 },
+  badgeText: { ...type.caption, fontSize: 10, color: colors.textDim },
 
   permission: {
     marginTop: spacing.md,
@@ -484,50 +522,105 @@ const styles = StyleSheet.create({
   },
   permissionText: { ...type.caption, color: colors.textDim, fontWeight: '500' },
 
-  sheet: {
-    marginTop: 'auto',
-    gap: spacing.md,
+  spacer: { flex: 1 },
+
+  recordPanel: {
+    alignItems: 'center',
+    gap: spacing.sm,
     paddingTop: spacing.lg,
-    backgroundColor: 'rgba(8,9,12,0.92)',
+    paddingHorizontal: spacing.lg,
+    backgroundColor: 'rgba(8,9,12,0.88)',
     borderTopLeftRadius: radius.xl,
     borderTopRightRadius: radius.xl,
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  picker: { gap: spacing.sm, paddingHorizontal: spacing.lg },
-  pick: {
-    alignItems: 'center',
-    gap: 3,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    minWidth: 62,
-  },
-  pickActive: { borderColor: colors.vibe, backgroundColor: colors.vibeDim },
-  pickText: { ...type.caption, fontSize: 10, color: colors.textDim },
-  pickTextActive: { color: colors.vibe },
 
-  controls: {
+  liveWave: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
+    justifyContent: 'center',
+    gap: 3,
+    height: 40,
   },
-  input: {
-    width: 88,
-    ...type.body,
-    color: colors.text,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+  liveBar: { width: 3, borderRadius: 2, backgroundColor: colors.accent },
+  timer: { ...type.label, color: colors.accent, fontVariant: ['tabular-nums'] },
+  recordHint: { ...type.caption, color: colors.textDim },
+
+  capturedCard: {
+    width: '100%',
+    padding: spacing.md,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
+    gap: 6,
   },
+  capturedTitle: { ...type.label, color: colors.live },
+  capturedRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+  capturedSub: { ...type.caption, color: colors.textFaint },
+  playSmall: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: colors.text,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  playSmallIcon: {
+    width: 0,
+    height: 0,
+    marginLeft: 3,
+    borderTopWidth: 6,
+    borderBottomWidth: 6,
+    borderLeftWidth: 10,
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
+    borderLeftColor: colors.bg,
+  },
+
+  recordButton: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 3,
+    borderColor: colors.text,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: spacing.xs,
+  },
+  recordButtonActive: { borderColor: colors.accent },
+  recordInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: colors.accent },
+  recordInnerActive: { width: 28, height: 28, borderRadius: 6 },
+  recordLabel: { ...type.label, color: colors.text },
+  status: { ...type.caption, color: colors.live, textAlign: 'center' },
+
+  strip: { gap: spacing.sm, paddingVertical: spacing.xs },
+  stripItem: {
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    backgroundColor: colors.surfaceRaised,
+    minWidth: 70,
+  },
+  stripName: { ...type.caption, fontSize: 10 },
+
+  actionRow: { width: '100%', gap: spacing.sm },
+  secondaryButton: {
+    alignSelf: 'center',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.vibe,
+    backgroundColor: colors.vibeDim,
+  },
+  secondaryText: { ...type.label, color: colors.vibe },
   next: {
-    width: 88,
+    width: '100%',
     paddingVertical: spacing.md,
     borderRadius: radius.md,
     alignItems: 'center',
@@ -537,28 +630,50 @@ const styles = StyleSheet.create({
   nextText: { ...type.label, color: colors.bg },
   nextTextDisabled: { color: colors.textFaint },
 
-  strip: { gap: spacing.sm, paddingHorizontal: spacing.lg },
-  stripItem: {
-    flexDirection: 'row',
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.75)',
     alignItems: 'center',
-    gap: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
+    justifyContent: 'center',
+    padding: spacing.xl,
+  },
+  modalCard: {
+    width: '100%',
+    padding: spacing.xl,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSolid,
+    borderWidth: 1,
+    borderColor: colors.border,
+    gap: spacing.md,
+  },
+  modalTitle: { ...type.title, color: colors.text },
+  modalSub: { ...type.caption, color: colors.textDim, fontWeight: '500' },
+  modalInput: {
+    ...type.body,
+    color: colors.text,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
     borderRadius: radius.md,
     borderWidth: 1,
-    backgroundColor: colors.surfaceRaised,
+    borderColor: colors.borderStrong,
+    backgroundColor: colors.bg,
   },
-
-  describeButton: {
-    alignSelf: 'center',
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: radius.pill,
+  modalButtons: { flexDirection: 'row', gap: spacing.md },
+  modalSkip: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    borderRadius: radius.md,
     borderWidth: 1,
-    borderColor: colors.vibe,
-    backgroundColor: colors.vibeDim,
+    borderColor: colors.border,
   },
-  describeText: { ...type.label, color: colors.vibe },
-  cameraToggle: { alignSelf: 'center' },
-  cameraToggleText: { ...type.caption, color: colors.textFaint },
+  modalSkipText: { ...type.label, color: colors.textDim },
+  modalSave: {
+    flex: 2,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    borderRadius: radius.md,
+    backgroundColor: colors.vibe,
+  },
+  modalSaveText: { ...type.label, color: colors.bg },
 });

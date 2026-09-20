@@ -165,6 +165,14 @@ export const GEMMA4_STOPS = ['<turn|>', '<|turn>', '<|channel>', '<eos>'];
  * readable.
  */
 export const MODEL_SEARCH_PATHS = [
+  // App-private external storage FIRST. Everything below needs a runtime
+  // storage grant the app does not request, and /data/local/tmp is shell-owned
+  // so the app's uid cannot read it at all - the model appeared "missing"
+  // despite being on the device.
+  '/sdcard/WorldJam/',
+  '/storage/emulated/0/WorldJam/',
+  '/sdcard/Android/data/com.prxfr.worldjam/files/',
+  '/storage/emulated/0/Android/data/com.prxfr.worldjam/files/',
   '/data/local/tmp/llama/',
   '/sdcard/Download/',
   '/sdcard/models/',
