@@ -37,3 +37,6 @@ build.log
 metro.log
 test.log
 melody-test.log
+
+# Generated deck artifacts
+docs/WorldJam-Deck.html
