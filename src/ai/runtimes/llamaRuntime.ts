@@ -48,7 +48,15 @@ const DEFAULTS = {
    */
   contextSize: 1024,
   gpuLayers: 0,
-  threads: 4,
+  /*
+   * Six threads on an eight-core phone.
+   *
+   * Four left half the CPU idle while the arranger timed out; eight starves
+   * the audio callback and the UI, which on this app is worse than a slow
+   * plan. Six uses the big cores and leaves the little ones for everything
+   * that has to stay responsive.
+   */
+  threads: 6,
 };
 
 /**

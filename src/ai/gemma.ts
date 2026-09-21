@@ -120,7 +120,7 @@ RULES:
 - voiceRole is "lead" when the user sang a tune, "harmony" when the voice should sit under other parts, "texture" for wordless atmosphere, "none" when there is no voice.
 
 Reply with ONLY this JSON, no prose:
-{"bpm":92,"bars":4,"objectPattern":[{"object":"cup","beats":[1,3]},{"object":"table","beats":[2,4]}],"voiceRole":"lead","accompaniment":["bass","chords"],"style":"${snapshot.style}","reasoning":"one short sentence"}`;
+{"bpm":92,"bars":4,"objectPattern":[{"object":"cup","beats":[1,3]},{"object":"table","beats":[2,4]}],"voiceRole":"lead","accompaniment":["bass","chords"],"style":"${snapshot.style}"}`;
 }
 
 export interface PlanResult {
@@ -175,9 +175,16 @@ export async function generatePlan(
   const started = Date.now();
   try {
     const raw = await withTimeout(
-      // 200 tokens is enough for the arrangement JSON and roughly a third
-      // faster than 320 on a phone CPU.
-      runtime.generate(buildPrompt(snapshot, instruction), 200),
+      /*
+       * 128 tokens.
+       *
+       * Generation is linear in tokens produced, and on a 4.6B model running
+       * on phone CPU that is the whole latency budget. The plan JSON for a
+       * handful of objects fits well inside 128 now that the prompt no longer
+       * asks for a `reasoning` sentence — which cost real seconds to generate
+       * and which nothing in the app ever displayed.
+       */
+      runtime.generate(buildPrompt(snapshot, instruction), 128),
       PLAN_TIMEOUT_MS,
     );
     const elapsedMs = Date.now() - started;
