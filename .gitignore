@@ -30,3 +30,10 @@ modules/*/android/.cxx/
 # governs redistribution). Keep them on the device or beside the repo.
 *.gguf
 *.task
+
+# Debug artifacts from bundle verification
+bundle-test.js
+build.log
+metro.log
+test.log
+melody-test.log
