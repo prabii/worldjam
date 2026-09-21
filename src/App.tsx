@@ -6,6 +6,10 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { WelcomeScreen } from '@/screens/WelcomeScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { CaptureScreen } from '@/screens/CaptureScreen';
+import { ScanScreen } from '@/screens/ScanScreen';
+import { ObjectDetailScreen } from '@/screens/ObjectDetailScreen';
+import { MyJamsScreen } from '@/screens/MyJamsScreen';
+import { CreateJamScreen } from '@/screens/CreateJamScreen';
 import { BottomNav, type NavTab } from '@/components/ui/BottomNav';
 import { useSession } from '@/state/sessionStore';
 import { JamScreen } from '@/screens/JamScreen';
@@ -13,13 +17,15 @@ import { nativeAvailable, startEngine, stopEngine } from '@/audio/engine';
 import { initModel, releaseModel } from '@/ai/modelLoader';
 import { colors, spacing, type } from '@/theme';
 
-type Screen = 'welcome' | 'home' | 'capture' | 'jam';
+type Screen = 'welcome' | 'home' | 'scan' | 'object' | 'jams' | 'create' | 'jam';
 
 export default function App() {
   // A demo dies if the screen sleeps mid-jam.
   useKeepAwake();
 
   const [screen, setScreen] = useState<Screen>('welcome');
+  /** Which object the detail screen is showing. */
+  const [objectId, setObjectId] = useState<string | null>(null);
   const openSession = useSession((s) => s.openSession);
   const [engineError, setEngineError] = useState<string | null>(null);
 
@@ -89,27 +95,70 @@ export default function App() {
           />
         ) : screen === 'home' ? (
           <HomeScreen
-            onScan={() => setScreen('capture')}
-            onCompose={() => setScreen('jam')}
+            onScan={() => setScreen('scan')}
+            onCompose={() => setScreen('create')}
             onOpenSession={async (id) => {
               await openSession(id);
               setScreen('jam');
             }}
           />
-        ) : screen === 'capture' ? (
-          <CaptureScreen onDone={() => setScreen('jam')} />
+        ) : screen === 'scan' ? (
+          <ScanScreen
+            onBack={() => setScreen('home')}
+            onAddToStudio={() => {
+              // Straight to the newest object's own screen, which is where
+              // the style, tempo and AI direction are set.
+              const latest = useSession.getState().objects.at(-1);
+              if (latest) {
+                setObjectId(latest.id);
+                setScreen('object');
+              } else {
+                setScreen('jam');
+              }
+            }}
+            onOpenObject={(id) => {
+              setObjectId(id);
+              setScreen('object');
+            }}
+          />
+        ) : screen === 'object' && objectId ? (
+          <ObjectDetailScreen
+            objectId={objectId}
+            onBack={() => setScreen('scan')}
+            onGenerate={() => setScreen('jam')}
+            onAddObject={() => setScreen('scan')}
+          />
+        ) : screen === 'create' ? (
+          <CreateJamScreen
+            onBack={() => setScreen('home')}
+            onRecord={() => setScreen('scan')}
+            onGenerate={() => setScreen('jam')}
+          />
+        ) : screen === 'jams' ? (
+          <MyJamsScreen
+            onBack={() => setScreen('home')}
+            onOpen={async (id) => {
+              await openSession(id);
+              setScreen('jam');
+            }}
+            onNewJam={() => setScreen('scan')}
+          />
         ) : (
           <JamScreen onBack={() => setScreen('home')} />
         )}
 
         {/* Nav is hidden on the welcome screen, which is a full-bleed
             standalone moment rather than part of the tabbed app. */}
-        {screen !== 'welcome' && screen !== 'capture' && (
+        {screen !== 'welcome' && screen !== 'scan' && (
           <BottomNav
-            active={screen === 'home' ? 'home' : 'studio'}
-            onSelect={(t) => setScreen(t === 'home' ? 'home' : 'jam')}
-            onCapture={() => setScreen('capture')}
-            disabled={['jams', 'profile']}
+            active={
+              screen === 'home' ? 'home' : screen === 'jams' ? 'jams' : 'studio'
+            }
+            onSelect={(t) =>
+              setScreen(t === 'home' ? 'home' : t === 'jams' ? 'jams' : 'jam')
+            }
+            onCapture={() => setScreen('scan')}
+            disabled={['profile']}
           />
         )}
 
