@@ -19,6 +19,7 @@
     "expo-camera": "~16.0.7",
     "expo-dev-client": "~5.0.4",
     "expo-file-system": "~18.0.4",
+    "expo-font": "~13.0.4",
     "expo-haptics": "~14.0.0",
     "expo-keep-awake": "~14.0.1",
     "expo-linear-gradient": "~14.0.2",
