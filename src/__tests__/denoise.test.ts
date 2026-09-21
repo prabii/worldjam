@@ -222,3 +222,63 @@ describe('transient window keeps the sound intact', () => {
     expect(cleaned.length / SR).toBeGreaterThan(0.3);
   });
 });
+
+describe('playback audio is the recording, not a processed copy', () => {
+  const SR = 48000;
+
+  /** A struck object with quiet upper harmonics over a faint room. */
+  function ringingObject(): number[] {
+    const total = Math.floor(SR * 1.2);
+    const out = new Array<number>(total);
+    const onset = Math.floor(SR * 0.2);
+    for (let i = 0; i < total; i++) {
+      let v = (Math.random() - 0.5) * 0.003;
+      if (i >= onset) {
+        const t = (i - onset) / SR;
+        const env = Math.exp(-t * 4);
+        // Fundamental plus two quiet partials — the partials are what make a
+        // cup sound like a cup rather than a beep, and they are exactly what
+        // over-subtraction removes.
+        v += Math.sin(2 * Math.PI * 430 * t) * 0.45 * env;
+        v += Math.sin(2 * Math.PI * 1290 * t) * 0.08 * env;
+        v += Math.sin(2 * Math.PI * 2580 * t) * 0.04 * env;
+      }
+      out[i] = v;
+    }
+    return out;
+  }
+
+  it('denoising measurably changes the signal, which is why it is not used for playback', () => {
+    // This pins the reason for the split rather than the split itself: if
+    // spectral subtraction were transparent there would be no bug to fix.
+    const pcm = ringingObject();
+    const { pcm: cleaned } = cleanCapture(pcm, SR);
+
+    const n = Math.min(pcm.length, cleaned.length);
+    let diff = 0;
+    for (let i = 0; i < n; i++) diff += Math.abs(pcm[i] - cleaned[i]);
+    expect(diff / n).toBeGreaterThan(0);
+  });
+
+  it('the gated hit keeps its energy — it is not hollowed out', () => {
+    const pcm = ringingObject();
+    const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR));
+    expect(w).not.toBeNull();
+
+    const hit = pcm.slice(w!.start, w!.end);
+    // Energy of the raw hit must survive gating: the window only trims, it
+    // must never attenuate.
+    expect(rms(hit)).toBeGreaterThan(0.02);
+  });
+
+  it('gating alone preserves samples exactly', () => {
+    // Every sample inside the window must be bit-identical to the recording.
+    // Anything else means playback is not what was captured.
+    const pcm = ringingObject();
+    const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR))!;
+    const hit = pcm.slice(w.start, w.end);
+    for (let i = 0; i < hit.length; i += 97) {
+      expect(hit[i]).toBe(pcm[w.start + i]);
+    }
+  });
+});

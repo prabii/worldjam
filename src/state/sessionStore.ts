@@ -31,7 +31,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { transport } from '@/audio/transport';
 import { renderArrangement } from '@/audio/arrangement';
-import { cleanCapture } from '@/dsp/denoise';
+import { cleanCapture, estimateNoiseFloor, findTransientWindow } from '@/dsp/denoise';
 import { describeMelody, refineMelody } from '@/dsp/melody';
 import { buildRhythmCues, describeCapture } from '@/audio/guidance';
 import { guidance, isGuidanceEnabled, setGuidanceEnabled, speakNow } from '@/audio/speech';
@@ -415,11 +415,27 @@ export const useSession = create<SessionState>((set, get) => ({
     }
 
     // --- object capture ---
-    // Gate to the hit and subtract the room before anything else: analysis
-    // and playback should both see the object, not the fan in the corner.
-    const cleaned = cleanCapture(raw, sr);
-    const { pcm } = trimSilence(cleaned.pcm, sr);
-    const features = extractFeatures(pcm, sr);
+    /*
+     * What plays back is the RECORDING, not a processed version of it.
+     *
+     * Denoising used to run before playback as well as analysis. Spectral
+     * subtraction at 1.5x over-subtraction strips the quiet harmonics and
+     * body that make an object sound like itself, so tapping a captured cup
+     * played something thinner and metallic — recognisably not what was
+     * recorded. That is the one thing this app cannot get wrong.
+     *
+     * So the signal splits here. Playback gets the real audio, gated only to
+     * the hit and trimmed of silence. Analysis gets the denoised copy, where
+     * removing the room genuinely helps decide brightness and decay, and
+     * where nobody is listening.
+     */
+    const window = findTransientWindow(raw, sr, estimateNoiseFloor(raw, sr));
+    const hit = window ? Array.from(raw).slice(window.start, window.end) : Array.from(raw);
+    const { pcm } = trimSilence(hit, sr);
+
+    // Denoised only for measurement.
+    const analysed = cleanCapture(pcm, sr);
+    const features = extractFeatures(analysed.pcm, sr);
     const role = inferRole(features);
 
     const state = get();
@@ -452,8 +468,10 @@ export const useSession = create<SessionState>((set, get) => ({
     set({
       objects: [...state.objects, obj],
       lastExportPath: null,
-      statusMessage: cleaned.gated
-        ? `${target.label} → ${role} · noise −${cleaned.noiseReducedDb.toFixed(0)}dB`
+      // The gate is reported because it ran on the ANALYSIS copy; the audio
+      // the user will hear is untouched.
+      statusMessage: analysed.gated
+        ? `${target.label} → ${role} · room −${analysed.noiseReducedDb.toFixed(0)}dB`
         : `${target.label} → ${role}`,
     });
 
@@ -463,7 +481,7 @@ export const useSession = create<SessionState>((set, get) => ({
 
     // Spoken confirmation means a capture can be verified without looking.
     if (isGuidanceEnabled()) {
-      speakNow(describeCapture(obj, cleaned.noiseReducedDb));
+      speakNow(describeCapture(obj, analysed.noiseReducedDb));
     }
   },
 

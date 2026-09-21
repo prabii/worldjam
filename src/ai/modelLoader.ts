@@ -58,10 +58,6 @@ function fileSizeMb(info: FileSystem.FileInfo): number {
  * the directory is listable, which scoped storage does not guarantee.
  */
 const CANDIDATE_NAMES = [
-  // Qwen3 1.7B first: at 1.1 GB it is the one that actually fits a mid-range
-  // phone. Gemma 4 E2B is 3.35 GB and cannot load on a device with ~2 GB free.
-  'Qwen3-1.7B-Q4_K_M.gguf',
-  'qwen3-1.7b-q4_k_m.gguf',
   'gemma-4-E2B_q4_0-it.gguf',
   'gemma-4-E2B-it-qat-q4_0.gguf',
   'gemma-4-E2B-it-q4_0.gguf',
@@ -69,6 +65,9 @@ const CANDIDATE_NAMES = [
   'gemma-4-E2B_q4_0.gguf',
   'gemma-3n-E2B-it-q4_0.gguf',
   'gemma-3-1b-it-q4_0.gguf',
+  // Kept last: a smaller fallback for devices where Gemma cannot load.
+  // The runtime picks the chat template from the file name, so either works.
+  'Qwen3-1.7B-Q4_K_M.gguf',
 ];
 
 /**
