@@ -15,6 +15,7 @@ import { Glyph, type GlyphName } from '@/components/ui/Glyph';
 import { GradientButton } from '@/components/ui/GradientButton';
 import { Knob } from '@/components/ui/Knob';
 import { NeonCard } from '@/components/ui/NeonCard';
+import { buildBrief } from '@/ai/brief';
 import { useSession } from '@/state/sessionStore';
 import { colors } from '@/theme';
 import { gradients } from '@/theme/gradients';
@@ -84,19 +85,9 @@ export function CreateJamScreen({ onBack, onRecord, onGenerate }: Props) {
   const generate = async () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
     if (direction.trim()) setReference(direction.trim());
-    // The mood is stated in words as well as mapped to a style, since "Sad"
-    // and "Focus" both select lo-fi but should not produce the same song.
-    const texture: string[] = [];
-    if (reverb > 0.65) texture.push('lots of reverb, wide and distant');
-    else if (reverb < 0.2) texture.push('dry and close, almost no reverb');
-    if (delay > 0.6) texture.push('plenty of space between hits');
-    else if (delay < 0.2) texture.push('tight, busy, little space');
-    const semis = Math.round((pitch - 0.5) * 24);
-    if (semis !== 0) texture.push(`pitched ${semis > 0 ? 'up' : 'down'} ${Math.abs(semis)} semitones`);
-
-    const brief = [mood.toLowerCase(), ...texture, direction.trim()]
-      .filter(Boolean)
-      .join(', ');
+    // The knobs describe the result rather than driving an effect chain; see
+    // ai/brief.ts for why.
+    const brief = buildBrief({ mood, reverb, space: delay, pitch, direction });
     await arrange(brief || undefined);
     onGenerate();
   };
