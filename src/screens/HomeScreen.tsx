@@ -34,11 +34,36 @@ interface Props {
 
 /** Illustrative categories — not selectable, no audio attached. */
 const EXPLORE = [
-  { category: 'cup' as const, label: 'Cups', role: 'Percussion', color: '#F472B6' },
-  { category: 'plant' as const, label: 'Plants', role: 'Ambient', color: '#34D399' },
-  { category: 'laptop' as const, label: 'Laptops', role: 'Synth', color: '#A78BFA' },
-  { category: 'bottle' as const, label: 'Bottles', role: 'Hit', color: '#38BDF8' },
-  { category: 'keys' as const, label: 'Keys', role: 'Clicks', color: '#FB923C' },
+  {
+    label: 'Cups',
+    role: 'Percussion',
+    color: '#F472B6',
+    art: require('../../assets/objects/cups.png'),
+  },
+  {
+    label: 'Plants',
+    role: 'Ambient',
+    color: '#34D399',
+    art: require('../../assets/objects/plants.png'),
+  },
+  {
+    label: 'Laptops',
+    role: 'Synth',
+    color: '#A78BFA',
+    art: require('../../assets/objects/laptops.png'),
+  },
+  {
+    label: 'Bottles',
+    role: 'Hit',
+    color: '#38BDF8',
+    art: require('../../assets/objects/bottles.png'),
+  },
+  {
+    label: 'Keys',
+    role: 'Clicks',
+    color: '#FB923C',
+    art: require('../../assets/objects/keys.png'),
+  },
 ];
 
 export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
@@ -175,7 +200,7 @@ export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
         >
           {EXPLORE.map((e) => (
             <View key={e.label} style={styles.exploreCard}>
-              <ObjectIcon category={e.category} color={e.color} size={34} />
+              <Image source={e.art} style={styles.exploreArt} resizeMode="cover" />
               <Text style={styles.exploreName}>{e.label}</Text>
               <View style={[styles.rolePill, { borderColor: e.color }]}>
                 <Text style={[styles.roleText, { color: e.color }]}>{e.role}</Text>
@@ -458,14 +483,22 @@ const styles = StyleSheet.create({
   soundRole: { ...type.caption, fontSize: 9, textTransform: 'capitalize' },
 
   exploreCard: {
-    width: 104,
+    // Wide enough for the product photo to be recognisable; a 104pt card
+    // reduced the mug to a smudge.
+    width: 124,
     alignItems: 'center',
     gap: 7,
-    padding: spacing.md,
+    padding: spacing.sm,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
+  },
+  exploreArt: {
+    width: '100%',
+    height: 78,
+    borderRadius: radius.md,
+    marginBottom: spacing.sm,
   },
   exploreName: { ...type.label, fontSize: 12, color: colors.text },
   rolePill: {

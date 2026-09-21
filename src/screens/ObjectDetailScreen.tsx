@@ -1,5 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import {
+  Image,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -33,14 +34,21 @@ interface Props {
   onAddObject: () => void;
 }
 
-/** The six vibes, as the mockup labels and orders them. */
-const STYLES: Array<{ key: Style; label: string; colors: [string, string] }> = [
-  { key: 'lofi', label: 'Lo-fi', colors: ['#7C3AED', '#EC4899'] },
-  { key: 'edm', label: 'EDM', colors: ['#2563EB', '#22D3EE'] },
-  { key: 'cinematic', label: 'Ambient', colors: ['#1E3A8A', '#6366F1'] },
-  { key: 'chill', label: 'Hip Hop', colors: ['#EA580C', '#F59E0B'] },
-  { key: 'rock', label: 'Acoustic', colors: ['#B45309', '#DC2626'] },
-  { key: 'jazz', label: 'Cinematic', colors: ['#6D28D9', '#A855F7'] },
+/**
+ * The six vibes, with the artwork from the design.
+ *
+ * Each tile is the real image rather than a flat gradient: a sunset, a neon
+ * triangle, a cassette. The picture is what makes the choice readable at a
+ * glance — six coloured rectangles all read as "a button", and the user has to
+ * fall back on the label every time.
+ */
+const STYLES: Array<{ key: Style; label: string; art: number }> = [
+  { key: 'lofi', label: 'Lo-fi', art: require('../../assets/styles/lofi.png') },
+  { key: 'edm', label: 'EDM', art: require('../../assets/styles/edm.png') },
+  { key: 'cinematic', label: 'Ambient', art: require('../../assets/styles/ambient.png') },
+  { key: 'chill', label: 'Hip Hop', art: require('../../assets/styles/hiphop.png') },
+  { key: 'rock', label: 'Acoustic', art: require('../../assets/styles/acoustic.png') },
+  { key: 'jazz', label: 'Cinematic', art: require('../../assets/styles/cinematic.png') },
 ];
 
 const TABS: SegmentTab[] = [
@@ -290,12 +298,7 @@ export function ObjectDetailScreen({ objectId, onBack, onGenerate, onAddObject }
                 accessibilityLabel={`${s.label} style`}
                 accessibilityState={{ selected: active }}
               >
-                <LinearGradient
-                  colors={s.colors}
-                  start={{ x: 0, y: 0 }}
-                  end={{ x: 1, y: 1 }}
-                  style={styles.styleArt}
-                />
+                <Image source={s.art} style={styles.styleArt} resizeMode="cover" />
                 <Text style={[styles.styleLabel, active && styles.styleLabelActive]}>
                   {s.label}
                 </Text>
