@@ -22,6 +22,22 @@ interface Props {
   onDetections: (detections: Detection[]) => void;
 }
 
+/**
+ * Live object detection is currently disabled.
+ *
+ * The frame-processor path worked — it read a laptop at 0.54 confidence — but
+ * holding a CameraX buffer across a throttled frame exhausted the six-image
+ * pool and took the camera, the GL surface and the screen down with it. The
+ * product does not depend on detection: the captured audio decides an
+ * object's musical role, and the user names it. So the preview runs with no
+ * frame processor attached, which is the only way to be certain no buffer is
+ * ever held.
+ *
+ * To re-enable: set this true and re-test the throttle path on device,
+ * watching logcat for "maxImages (6) has already been acquired".
+ */
+const DETECTION_ENABLED = false;
+
 /** EfficientDet-Lite's input size. */
 const INPUT = 320;
 
@@ -67,6 +83,7 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
   }, [hasPermission, requestPermission]);
 
   useEffect(() => {
+    if (!DETECTION_ENABLED) return;
     let cancelled = false;
     void loadDetector().then((m) => {
       if (cancelled) return;
@@ -89,9 +106,6 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
       Worklets.createRunOnJS(
         (boxes: number[], classes: number[], scores: number[], count: number) => {
           const parsed = parseDetections(boxes, classes, scores, count);
-          // Temporary: the first few frames tell us whether the model is
-          // running at all and what it returns, which is the only way to tell
-          // "no objects in view" apart from "inference never happened".
           onDetections(tracker.update(parsed));
         },
       ),
@@ -101,20 +115,43 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
   const frameProcessor = useFrameProcessor(
     (frame) => {
       'worklet';
-      if (!detecting) return;
 
-      // Throttle inside the worklet: returning here costs nothing, whereas
-      // hopping to JS to decide would defeat the purpose.
+      /*
+       * Every path through this function must fall through to the end.
+       *
+       * CameraX lends the processor a buffer from a pool of six and reclaims
+       * it when the function returns. Inference is slower than the frame rate,
+       * so the throttle below skips most frames — but an early `return` while
+       * holding work in flight exhausted the pool within six frames and killed
+       * the camera with "maxImages (6) has already been acquired", taking the
+       * GL surface and the whole screen down with it.
+       *
+       * Skipping is therefore expressed as "do no work", never as an early
+       * exit, and the one call that can throw is wrapped so a bad frame cannot
+       * escape either.
+       */
       const now = Date.now();
       // eslint-disable-next-line no-undef
       const last = (globalThis as Record<string, unknown>).__wjLastRun as number | undefined;
-      if (last != null && now - last < MIN_INTERVAL_MS) return;
-      (globalThis as Record<string, unknown>).__wjLastRun = now;
+      const due = last == null || now - last >= MIN_INTERVAL_MS;
 
-      if (model == null) return;
+      if (detecting && model != null && due) {
+        (globalThis as Record<string, unknown>).__wjLastRun = now;
+        runDetection(frame);
+      }
+    },
+    [detecting, resize, publish, model],
+  );
 
-      try {
-        const resized = resize(frame, {
+  /** Extracted so the frame processor itself has exactly one exit point. */
+  const runDetection = useMemo(
+    () =>
+      (frame: Parameters<Parameters<typeof useFrameProcessor>[0]>[0]) => {
+        'worklet';
+        if (model == null) return;
+
+        try {
+          const resized = resize(frame, {
           scale: { width: INPUT, height: INPUT },
           pixelFormat: 'rgb',
           dataType: 'uint8',
@@ -144,12 +181,12 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
         }
         const count = Math.min(n, Math.round(rawCount[0] ?? n));
 
-        publish(boxes, classes, scores, count);
-      } catch {
-        // A single bad frame must never take the camera down.
-      }
-    },
-    [detecting, resize, publish, model],
+          publish(boxes, classes, scores, count);
+        } catch {
+          // A single bad frame must never take the camera down.
+        }
+      },
+    [model, resize, publish],
   );
 
   if (!device) {
@@ -178,7 +215,7 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
       torch={torch ? 'on' : 'off'}
       // Only attach the processor once the model exists, so early frames are
       // not spent calling into a null model.
-      frameProcessor={model ? frameProcessor : undefined}
+      frameProcessor={DETECTION_ENABLED && model ? frameProcessor : undefined}
     />
   );
 }

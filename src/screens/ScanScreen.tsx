@@ -234,9 +234,7 @@ export function ScanScreen({ onBack, onAddToStudio, onOpenObject }: Props) {
                   ? 'Strike the object now'
                   : detections.length > 0
                     ? `Hold to record the ${detections[0].displayName.toLowerCase()}`
-                    : aiMode
-                      ? 'Position the object in frame'
-                      : 'Hold anywhere to record'}
+                    : 'Point at something and hold to record it'}
               </Text>
             </View>
           </View>
