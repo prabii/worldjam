@@ -1,16 +1,22 @@
 /**
- * COCO 2017 class names, in the index order EfficientDet-Lite returns.
+ * COCO class names in the order EfficientDet-Lite actually emits.
  *
- * The model outputs a class index; this is the only thing that turns index 47
- * into "cup". The list must stay in exactly this order — a shifted entry would
- * silently mislabel every detection, which is the kind of bug that looks like
- * a broken model rather than a wrong array.
+ * There are two COCO orderings in circulation and they are not compatible:
  *
- * Index 0 is unused in this model's output space; it is kept so indices line
- * up with the published COCO ordering rather than being off by one.
+ *  - the 91-entry "paper" ordering, which keeps gaps for classes that were
+ *    defined but never annotated (streetsign, hat, shoe, plate, mirror, …)
+ *  - this 80-entry contiguous ordering, which drops the gaps
+ *
+ * TF Hub's EfficientDet-Lite outputs the 80-class indices. Using the 91-entry
+ * list against it shifts almost every label: index 63 reads as "couch" when
+ * the model means "laptop", and a phone comes back named "laptop". Nothing
+ * errors — the labels are simply wrong, which is far harder to spot than a
+ * crash.
+ *
+ * Do not add a placeholder at index 0. The model is 0-based over this list:
+ * class 0 is genuinely "person".
  */
 export const COCO_LABELS: readonly string[] = [
-  'unlabeled',
   'person',
   'bicycle',
   'car',
@@ -22,7 +28,6 @@ export const COCO_LABELS: readonly string[] = [
   'boat',
   'traffic light',
   'fire hydrant',
-  'street sign',
   'stop sign',
   'parking meter',
   'bench',
@@ -36,11 +41,8 @@ export const COCO_LABELS: readonly string[] = [
   'bear',
   'zebra',
   'giraffe',
-  'hat',
   'backpack',
   'umbrella',
-  'shoe',
-  'eye glasses',
   'handbag',
   'tie',
   'suitcase',
@@ -55,7 +57,6 @@ export const COCO_LABELS: readonly string[] = [
   'surfboard',
   'tennis racket',
   'bottle',
-  'plate',
   'wine glass',
   'cup',
   'fork',
@@ -76,12 +77,8 @@ export const COCO_LABELS: readonly string[] = [
   'couch',
   'potted plant',
   'bed',
-  'mirror',
   'dining table',
-  'window',
-  'desk',
   'toilet',
-  'door',
   'tv',
   'laptop',
   'mouse',
@@ -93,7 +90,6 @@ export const COCO_LABELS: readonly string[] = [
   'toaster',
   'sink',
   'refrigerator',
-  'blender',
   'book',
   'clock',
   'vase',

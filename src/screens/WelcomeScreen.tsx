@@ -9,10 +9,6 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { LinearGradient } from 'expo-linear-gradient';
-import { ObjectIcon } from '@/components/ObjectIcon';
-import { GradientButton } from '@/components/ui/GradientButton';
-import { colors, radius, spacing, type } from '@/theme';
 
 interface Props {
   onStart: () => void;
@@ -20,261 +16,126 @@ interface Props {
 }
 
 /**
- * Home screen, built over the supplied artwork.
+ * Welcome screen, built over the supplied artwork.
  *
- * The globe, wordmark and tagline live in the background image; everything
- * laid out here is the interactive chrome positioned over it. That split
- * keeps the artwork pixel-accurate while the controls stay real views with
- * real touch targets and accessibility labels.
+ * The artwork is a complete screen design: it already contains the corner
+ * kickers, the globe, the wordmark, the object icons, the blurb, and painted
+ * versions of both buttons. So this draws none of those. An earlier version
+ * re-created the kickers, icons and blurb as real views on top, which meant
+ * every line appeared twice, slightly offset — the artwork's copy showing
+ * through behind the app's.
  *
- * The object icons are illustrative of what CAN be recorded — they are not
- * selectable and carry no audio. Every sound in the app comes from the user's
- * own capture.
+ * What is laid out here is only what has to be interactive: two tap targets
+ * positioned over where the buttons are painted. They are transparent, so the
+ * artwork's own buttons are what the user sees, but they are real Pressables
+ * with real accessibility labels.
+ *
+ * Positions are fractions of the screen height rather than fixed offsets,
+ * because the artwork is scaled with `cover` and a fixed offset would drift
+ * away from the painted buttons on a different aspect ratio.
  */
-const EXAMPLES = [
-  { category: 'cup' as const, label: 'CUPS', color: '#F472B6' },
-  { category: 'plant' as const, label: 'PLANTS', color: '#34D399' },
-  { category: 'laptop' as const, label: 'LAPTOPS', color: '#A78BFA' },
-  { category: 'bottle' as const, label: 'BOTTLES', color: '#38BDF8' },
-  { category: 'keys' as const, label: 'KEYS', color: '#FB923C' },
-];
+
+/** Where the artwork paints each control, as a fraction of image height. */
+const GET_STARTED_Y = 0.826;
+const HOW_IT_WORKS_Y = 0.894;
+/** Painted button height, same units. */
+const BUTTON_H = 0.046;
 
 export function WelcomeScreen({ onStart, onHowItWorks }: Props) {
   const insets = useSafeAreaInsets();
-
   const fade = useRef(new Animated.Value(0)).current;
-  const rise = useRef(new Animated.Value(24)).current;
 
   useEffect(() => {
-    // Content settles in rather than snapping — the first impression of the
-    // product should feel considered.
-    Animated.parallel([
-      Animated.timing(fade, {
-        toValue: 1,
-        duration: 700,
-        easing: Easing.out(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.timing(rise, {
-        toValue: 0,
-        duration: 800,
-        easing: Easing.out(Easing.cubic),
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, [fade, rise]);
+    // The artwork fades up rather than snapping in — this is the first thing
+    // anyone sees of the product.
+    Animated.timing(fade, {
+      toValue: 1,
+      duration: 600,
+      easing: Easing.out(Easing.quad),
+      useNativeDriver: true,
+    }).start();
+  }, [fade]);
 
   return (
     <View style={styles.root}>
-      <Image
-        source={require('../../assets/splash.png')}
-        style={StyleSheet.absoluteFill}
-        resizeMode="cover"
-        accessible={false}
-      />
-
-      {/* Gradient scrim: clear over the globe, darker behind the controls so
-          text stays readable regardless of what the artwork does there. */}
-      <LinearGradient
-        colors={['rgba(5,6,10,0)', 'rgba(5,6,10,0.15)', 'rgba(5,6,10,0.78)']}
-        locations={[0, 0.55, 1]}
-        style={StyleSheet.absoluteFill}
-        pointerEvents="none"
-      />
-
-      <Animated.View
-        style={[
-          styles.content,
-          {
-            paddingTop: insets.top + spacing.lg,
-            paddingBottom: insets.bottom + spacing.lg,
-            opacity: fade,
-            transform: [{ translateY: rise }],
-          },
-        ]}
-      >
-        {/* Corner kickers, matching the artwork's placement. */}
-        <View style={styles.header}>
-          <View>
-            <Text style={styles.kicker}>TURN</Text>
-            <Text style={styles.kicker}>YOUR WORLD</Text>
-            <Text style={[styles.kicker, styles.kickerAccent]}>INTO A SONG</Text>
-            <LinearGradient
-              colors={['#38BDF8', '#A855F7']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={styles.rule}
-            />
-          </View>
-
-          <View style={styles.headerRight}>
-            <Text style={[styles.kicker, styles.right]}>REAL OBJECTS</Text>
-            <Text style={[styles.kicker, styles.right]}>REAL SOUNDS</Text>
-            <Text style={[styles.kicker, styles.kickerAccent, styles.right]}>
-              INFINITE MUSIC
-            </Text>
-            <LinearGradient
-              colors={['#A855F7', '#38BDF8']}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-              style={[styles.rule, styles.ruleRight]}
-            />
-          </View>
-        </View>
-
-        {/* The globe and wordmark are in the artwork behind this space. */}
-        <View style={styles.artSpace} />
-
-        <View style={styles.examples}>
-          {EXAMPLES.map((e) => (
-            <View key={e.label} style={styles.example}>
-              <ObjectIcon category={e.category} color={e.color} size={30} />
-              <Text style={styles.exampleLabel}>{e.label}</Text>
-            </View>
-          ))}
-        </View>
-
-        <LinearGradient
-          colors={['#38BDF8', '#EC4899']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 0 }}
-          style={styles.divider}
+      <Animated.View style={[StyleSheet.absoluteFill, { opacity: fade }]}>
+        <Image
+          source={require('../../assets/splash.png')}
+          style={StyleSheet.absoluteFill}
+          resizeMode="cover"
+          // The artwork carries the screen's own text, so a screen reader is
+          // served by the labelled controls below, not by describing the image.
+          accessible={false}
         />
+      </Animated.View>
 
-        <Text style={styles.blurb}>
-          Scan your surroundings, capture real sounds,{'\n'}and let AI turn them into
-          music.
-        </Text>
-
-        <GradientButton
-          label="Get Started"
-          trailing="→"
+      {/* Tap targets over the painted buttons. Transparent by design: the
+          artwork supplies the visuals. */}
+      <View style={styles.hitLayer} pointerEvents="box-none">
+        <Pressable
           onPress={onStart}
-          accessibilityLabel="Get started capturing sounds"
-          style={styles.cta}
+          accessibilityRole="button"
+          accessibilityLabel="Get started"
+          accessibilityHint="Opens the home screen to begin capturing sounds"
+          style={({ pressed }) => [
+            styles.hit,
+            { top: `${GET_STARTED_Y * 100}%`, height: `${BUTTON_H * 100}%` },
+            pressed && styles.hitPressed,
+          ]}
         />
 
         <Pressable
           onPress={onHowItWorks}
           accessibilityRole="button"
           accessibilityLabel="See how it works"
-          style={styles.secondary}
-        >
-          <Text style={styles.secondaryText}>See How It Works</Text>
-          <View style={styles.playRing}>
-            <View style={styles.playTri} />
-          </View>
-        </Pressable>
+          style={({ pressed }) => [
+            styles.hit,
+            { top: `${HOW_IT_WORKS_Y * 100}%`, height: `${BUTTON_H * 100}%` },
+            pressed && styles.hitPressed,
+          ]}
+        />
+      </View>
 
-        {/* Page dots from the artwork. Only the first is active: the other
-            three are the onboarding pages still to be built, and showing them
-            sets the expectation honestly rather than faking navigation. */}
-        <View style={styles.dots}>
-          {[0, 1, 2, 3].map((i) => (
-            <View key={i} style={[styles.dot, i === 0 && styles.dotActive]} />
-          ))}
-        </View>
-      </Animated.View>
+      {/* Skip, for anyone who does not want the intro. Placed in the safe area
+          rather than over the artwork, so it covers nothing that is painted. */}
+      <Pressable
+        onPress={onStart}
+        accessibilityRole="button"
+        accessibilityLabel="Skip intro"
+        style={[styles.skip, { top: insets.top + 8 }]}
+        hitSlop={10}
+      >
+        <Text style={styles.skipText}>Skip</Text>
+      </Pressable>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#05060A' },
-  content: { flex: 1, paddingHorizontal: spacing.xl },
 
-  header: { flexDirection: 'row', justifyContent: 'space-between' },
-  headerRight: { alignItems: 'flex-end' },
-  kicker: {
-    ...type.caption,
-    fontSize: 11,
-    letterSpacing: 3,
-    lineHeight: 19,
-    color: 'rgba(255,255,255,0.82)',
+  hitLayer: { ...StyleSheet.absoluteFillObject },
+  hit: {
+    position: 'absolute',
+    left: '16%',
+    right: '16%',
+    borderRadius: 999,
   },
-  kickerAccent: { color: '#7DD3FC' },
-  right: { textAlign: 'right' },
-  rule: { width: 54, height: 2, borderRadius: 2, marginTop: spacing.sm },
-  ruleRight: { alignSelf: 'flex-end' },
+  /** A faint lift on press, so a tap is acknowledged on a painted button. */
+  hitPressed: { backgroundColor: 'rgba(255,255,255,0.14)' },
 
-  /** Reserved for the globe and wordmark in the background artwork. */
-  artSpace: { flex: 1 },
-
-  examples: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: spacing.md,
+  skip: {
+    position: 'absolute',
+    right: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    backgroundColor: 'rgba(8,10,18,0.55)',
   },
-  example: { alignItems: 'center', gap: 7 },
-  exampleLabel: {
-    ...type.caption,
-    fontSize: 9,
-    letterSpacing: 1.6,
-    color: 'rgba(255,255,255,0.7)',
+  skipText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: 'rgba(255,255,255,0.85)',
+    letterSpacing: 0.4,
   },
-
-  divider: {
-    width: 44,
-    height: 2,
-    borderRadius: 2,
-    alignSelf: 'center',
-    marginBottom: spacing.lg,
-  },
-
-  blurb: {
-    ...type.body,
-    fontSize: 16,
-    lineHeight: 24,
-    color: 'rgba(255,255,255,0.92)',
-    textAlign: 'center',
-    marginBottom: spacing.lg,
-  },
-
-  cta: { marginBottom: spacing.md },
-
-  secondary: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.md,
-    paddingVertical: spacing.md,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: 'rgba(255,255,255,0.3)',
-  },
-  secondaryText: { ...type.body, color: 'rgba(255,255,255,0.92)' },
-  playRing: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.75)',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  playTri: {
-    width: 0,
-    height: 0,
-    marginLeft: 2.5,
-    borderTopWidth: 4.5,
-    borderBottomWidth: 4.5,
-    borderLeftWidth: 7.5,
-    borderTopColor: 'transparent',
-    borderBottomColor: 'transparent',
-    borderLeftColor: 'rgba(255,255,255,0.95)',
-  },
-
-  dots: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.lg,
-  },
-  dot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: 'rgba(255,255,255,0.28)',
-  },
-  dotActive: { backgroundColor: '#FFFFFF', width: 8, height: 8, borderRadius: 4 },
 });

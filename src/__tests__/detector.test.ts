@@ -5,7 +5,7 @@ import {
   parseDetections,
 } from '@/vision/detector';
 import { categoryForCocoClass, roleInfoFor } from '@/vision/objectRoles';
-import { labelForIndex } from '@/vision/cocoLabels';
+import { COCO_LABELS, labelForIndex } from '@/vision/cocoLabels';
 
 /**
  * EfficientDet returns boxes as [y1, x1, y2, x2] — y first. Building the
@@ -20,7 +20,7 @@ function boxesFor(...rects: Array<[number, number, number, number]>): number[] {
 
 /** COCO index for a class name, so fixtures read clearly. */
 function idx(name: string): number {
-  for (let i = 0; i < 91; i++) {
+  for (let i = 0; i < COCO_LABELS.length; i++) {
     if (labelForIndex(i) === name) return i;
   }
   throw new Error(`no COCO index for ${name}`);
@@ -32,6 +32,36 @@ describe('cocoLabels', () => {
     expect(labelForIndex(idx('bottle'))).toBe('bottle');
     expect(labelForIndex(idx('laptop'))).toBe('laptop');
     expect(labelForIndex(idx('potted plant'))).toBe('potted plant');
+  });
+
+  /**
+   * The exact numbers EfficientDet-Lite emits, pinned literally.
+   *
+   * These were wrong once: the list was built from COCO's 91-entry "paper"
+   * ordering while the model emits the 80-entry contiguous one, so every
+   * label past the first gap was shifted and a phone was reported as a
+   * laptop. Nothing threw — writing the indices out by hand is the only way
+   * that stays caught.
+   */
+  it('uses the 80-class contiguous ordering the model emits', () => {
+    expect(labelForIndex(0)).toBe('person');
+    expect(labelForIndex(39)).toBe('bottle');
+    expect(labelForIndex(41)).toBe('cup');
+    expect(labelForIndex(56)).toBe('chair');
+    expect(labelForIndex(58)).toBe('potted plant');
+    expect(labelForIndex(60)).toBe('dining table');
+    expect(labelForIndex(63)).toBe('laptop');
+    expect(labelForIndex(66)).toBe('keyboard');
+    expect(labelForIndex(67)).toBe('cell phone');
+    expect(labelForIndex(79)).toBe('toothbrush');
+  });
+
+  it('has exactly 80 classes, not 91', () => {
+    expect(COCO_LABELS).toHaveLength(80);
+  });
+
+  it('has no placeholder at index 0 — the model is 0-based over this list', () => {
+    expect(COCO_LABELS[0]).not.toMatch(/unlabeled|background/i);
   });
 
   it('returns unknown for an out-of-range index', () => {
@@ -246,7 +276,7 @@ describe('tensor-shaped input', () => {
    */
   it('accepts Float32Array output, as the model actually returns', () => {
     const boxes = new Float32Array([0.3, 0.2, 0.7, 0.6]);
-    const classes = new Float32Array([47]); // cup
+    const classes = new Float32Array([idx('cup')]);
     const scores = new Float32Array([0.9]);
     const dets = parseDetections(boxes, classes, scores, 1);
     expect(dets).toHaveLength(1);
@@ -263,7 +293,7 @@ describe('tensor-shaped input', () => {
     // produces; it must not invent detections from undefined entries.
     const dets = parseDetections(
       new Float32Array([0.3, 0.2, 0.7, 0.6]),
-      new Float32Array([47]),
+      new Float32Array([idx('cup')]),
       new Float32Array([0.9]),
       25,
     );
