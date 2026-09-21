@@ -9,7 +9,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { DetectorCamera } from '@/components/DetectorCamera';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
@@ -20,7 +20,6 @@ import { Glyph } from '@/components/ui/Glyph';
 import { GradientButton } from '@/components/ui/GradientButton';
 import { DetectionOverlay } from '@/components/DetectionOverlay';
 import { LiveWaveform } from '@/components/LiveWaveform';
-import { useDetection } from '@/hooks/useDetection';
 import { useSession } from '@/state/sessionStore';
 import { speakNow } from '@/audio/speech';
 import { colors, radius } from '@/theme';
@@ -47,8 +46,8 @@ interface Props {
  */
 export function ScanScreen({ onBack, onAddToStudio, onOpenObject }: Props) {
   const insets = useSafeAreaInsets();
-  const [permission, requestPermission] = useCameraPermissions();
   const [stage, setStage] = useState({ width: 0, height: 0 });
+  const [detections, setDetections] = useState<Detection[]>([]);
   const [facing, setFacing] = useState<'back' | 'front'>('back');
   const [torch, setTorch] = useState(false);
   const [aiMode, setAiMode] = useState(true);
@@ -63,14 +62,6 @@ export function ScanScreen({ onBack, onAddToStudio, onOpenObject }: Props) {
   const guidanceOn = useSession((s) => s.guidanceOn);
 
   const isRecording = recording?.kind === 'object';
-
-  const { detections, ready: detectorReady, error: detectorError } = useDetection(
-    !!permission?.granted && !isRecording && aiMode,
-  );
-
-  useEffect(() => {
-    if (!permission?.granted) void requestPermission();
-  }, [permission?.granted, requestPermission]);
 
   // Recording timer — the "00:03" readout on the capture panel.
   useEffect(() => {
@@ -195,21 +186,15 @@ export function ScanScreen({ onBack, onAddToStudio, onOpenObject }: Props) {
       >
         {/* ---- Viewfinder ---- */}
         <View style={styles.viewfinder} onLayout={onStage}>
-          {permission?.granted ? (
-            <CameraView
-              style={StyleSheet.absoluteFill}
-              facing={facing}
-              enableTorch={torch}
-            />
-          ) : (
-            <View style={[StyleSheet.absoluteFill, styles.noCam]}>
-              <Glyph name="video" size={34} color={colors.textFaint} />
-              <Text style={styles.noCamText}>Camera permission needed</Text>
-              <Pressable onPress={() => requestPermission()} style={styles.noCamBtn}>
-                <Text style={styles.noCamBtnText}>Allow camera</Text>
-              </Pressable>
-            </View>
-          )}
+          <DetectorCamera
+            facing={facing}
+            torch={torch}
+            // Inference pauses while recording: the capture needs the CPU, and
+            // labels cannot change usefully while the phone is held against an
+            // object anyway.
+            detecting={aiMode && !isRecording}
+            onDetections={setDetections}
+          />
 
           {/* Tap anywhere on the feed to capture whatever is under the finger. */}
           <Pressable
@@ -249,11 +234,9 @@ export function ScanScreen({ onBack, onAddToStudio, onOpenObject }: Props) {
                   ? 'Strike the object now'
                   : detections.length > 0
                     ? `Hold to record the ${detections[0].displayName.toLowerCase()}`
-                    : detectorError
-                      ? 'Hold anywhere to record'
-                      : detectorReady
-                        ? 'Position the object in frame'
-                        : 'Starting detector…'}
+                    : aiMode
+                      ? 'Position the object in frame'
+                      : 'Hold anywhere to record'}
               </Text>
             </View>
           </View>
@@ -492,16 +475,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(120,140,190,0.28)',
     backgroundColor: '#0B0E16',
   },
-  noCam: { alignItems: 'center', justifyContent: 'center', gap: 10 },
-  noCamText: { fontSize: 13, color: colors.textDim, fontWeight: '600' },
-  noCamBtn: {
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(168,85,247,0.6)',
-  },
-  noCamBtnText: { color: '#E9D5FF', fontWeight: '700', fontSize: 13 },
   railWrap: { position: 'absolute', left: 12, top: 16 },
   flourishWrap: { position: 'absolute', right: 14, top: 150 },
   flourish: {
