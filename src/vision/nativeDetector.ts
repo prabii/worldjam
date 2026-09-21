@@ -4,10 +4,9 @@ import { parseDetections, type Detection } from './detector';
 /**
  * The bridge between camera frames and the detection parser.
  *
- * The model is loaded once and shared. Subscribers receive detections as
- * frames are processed; the frame processor itself lives in useFrameDetector,
- * which needs the VisionCamera Frame type and so cannot be imported here
- * without dragging native code into every test that touches detection.
+ * The model is loaded once and shared here so that the parser stays testable
+ * without a camera. The frame processor itself lives in DetectorCamera, which
+ * needs VisionCamera's Frame type.
  */
 
 type Listener = (detections: Detection[]) => void;
