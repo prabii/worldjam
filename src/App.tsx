@@ -11,6 +11,7 @@ import { ObjectDetailScreen } from '@/screens/ObjectDetailScreen';
 import { MyJamsScreen } from '@/screens/MyJamsScreen';
 import { CreateJamScreen } from '@/screens/CreateJamScreen';
 import { TrackDetailScreen } from '@/screens/TrackDetailScreen';
+import { ProfileScreen } from '@/screens/ProfileScreen';
 import { BottomNav, type NavTab } from '@/components/ui/BottomNav';
 import { useSession } from '@/state/sessionStore';
 import { JamScreen } from '@/screens/JamScreen';
@@ -37,7 +38,8 @@ type Screen =
   | 'studio'
   | 'create'
   | 'track'
-  | 'jams';
+  | 'jams'
+  | 'profile';
 
 export default function App() {
   // A demo dies if the screen sleeps mid-jam.
@@ -163,6 +165,11 @@ export default function App() {
             onKeepCreating={() => setScreen('scan')}
             onAddSounds={() => setScreen('scan')}
           />
+        ) : screen === 'profile' ? (
+          <ProfileScreen
+            onBack={() => setScreen('home')}
+            onOpenJams={() => setScreen('jams')}
+          />
         ) : (
           <MyJamsScreen
             onBack={() => setScreen('home')}
@@ -179,13 +186,16 @@ export default function App() {
         {screen !== 'welcome' && screen !== 'scan' && (
           <BottomNav
             active={
-              screen === 'home' ? 'home' : screen === 'jams' ? 'jams' : 'studio'
+              screen === 'home'
+                ? 'home'
+                : screen === 'jams'
+                  ? 'jams'
+                  : screen === 'profile'
+                    ? 'profile'
+                    : 'studio'
             }
-            onSelect={(t) =>
-              setScreen(t === 'home' ? 'home' : t === 'jams' ? 'jams' : 'studio')
-            }
+            onSelect={(t) => setScreen(t)}
             onCapture={() => setScreen('scan')}
-            disabled={['profile']}
           />
         )}
 
