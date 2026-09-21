@@ -404,6 +404,113 @@ slides.append(slide(
     bg='linear-gradient(140deg,#2A1145 0%,#14102A 50%,#0A0B10 100%)',
 ))
 
+# 12 — system architecture ----------------------------------------------
+slides.append(slide(
+    '<div style="display:flex; flex-direction:column; gap:26px; height:100%">'
+    + h2('System architecture', 62)
+    + f'<p style="font-size:25px; line-height:1.35; color:{MUTE}; margin:0">'
+      'Everything below runs on the handset. There is no server, and no code path '
+      'that sends audio anywhere.</p>'
+    # --- the pipeline, left to right ---
+    + '<div style="display:flex; gap:14px; align-items:stretch">'
+    + ''.join(
+        f'<div style="flex:1; display:flex; flex-direction:column; gap:10px; '
+        f'background:#12161F; border:1px solid {c}55; border-top:4px solid {c}; '
+        f'border-radius:14px; padding:22px">'
+        f'<p style="font-size:20px; font-weight:700; color:{c}; margin:0; '
+        f'letter-spacing:1px">{n}</p>'
+        f'<p style="font-size:21px; font-weight:600; color:{INK}; margin:0">{t}</p>'
+        f'<p style="font-size:18px; line-height:1.35; color:{MUTE}; margin:0">{d}</p>'
+        f'</div>'
+        for n, t, d, c in [
+            ('INPUT', 'Mic + Camera',
+             'AudioRecord at 48 kHz mono into a ring buffer; CameraX preview.', CYAN),
+            ('GATE', 'Transient window',
+             'Noise floor estimate, onset walk-back, tail gate. Keeps the hit and its ring.', '#7DD3FC'),
+            ('ANALYSE', 'Feature extraction',
+             'FFT centroid, RMS decay, YIN pitch, tonality. Decides the musical role.', LILAC),
+            ('PLAN', 'Gemma 4 E2B',
+             'llama.cpp, 6 threads, 128-token JSON plan. Schema-validated and repaired.', PINK),
+            ('RENDER', 'Arrangement',
+             'Form, densities, velocity curve, fills. One bar becomes a song.', MINT),
+            ('OUT', 'Oboe callback',
+             'Lock-free trigger queue, 8-voice mixer, spatial pan. Never allocates.', '#FBBF24'),
+        ])
+    + '</div>'
+    # --- the two guarantees ---
+    + '<div style="display:flex; gap:18px">'
+    + ''.join(
+        f'<div style="flex:1; background:#161A24; border:1px solid #2A3040; '
+        f'border-radius:14px; padding:24px 28px">'
+        f'<p style="font-size:23px; font-weight:700; color:{c}; margin:0 0 8px">{t}</p>'
+        f'<p style="font-size:21px; line-height:1.4; color:{DIM}; margin:0">{d}</p></div>'
+        for t, d, c in [
+            ('Real-time thread is sacred',
+             'The audio callback never allocates, locks, logs or crosses the JS bridge. '
+             'Triggers arrive through a lock-free SPSC queue; the scheduler pushes events '
+             '120 ms ahead so a GC pause cannot drop a beat.', CYAN),
+            ('The model is never in the loop',
+             'Inference happens on a button press, not per tap. If it is slow, missing or '
+             'returns bad JSON, the rule-based arranger answers in microseconds and the UI '
+             'says which one you heard.', PINK),
+        ])
+    + '</div>'
+    + f'<p style="font-size:22px; line-height:1.35; color:{MUTE}; margin:0">'
+      'React Native 0.76 (new architecture) &middot; Expo SDK 52 dev build &middot; '
+      'custom Turbo-style native module &middot; Zustand store &middot; 17 Jest suites in CI-ready form.</p>'
+    '</div>',
+    bg='#0C0E15',
+))
+
+# 13 — engineering detail -------------------------------------------------
+slides.append(slide(
+    '<div style="display:flex; flex-direction:column; justify-content:center; '
+    'gap:30px; height:100%">'
+    + kicker('Where the work actually went')
+    + h2('Engineering decisions worth defending', 60)
+    + '<div style="display:flex; gap:18px">'
+    + ''.join(
+        f'<div style="flex:1; display:flex; flex-direction:column; gap:12px; '
+        f'background:#141824; border:1px solid #2A3040; border-radius:18px; padding:30px">'
+        f'<p style="font-size:24px; font-weight:700; color:{c}; margin:0">{t}</p>'
+        f'<p style="font-size:20px; line-height:1.4; color:{DIM}; margin:0">{d}</p></div>'
+        for t, d, c in [
+            ('C++ engine, not a library',
+             'Oboe in exclusive mode with the burst size the device prefers. Forcing '
+             '48 kHz inserts a resampler and drops you into shared mode &mdash; we measured '
+             'both and kept the fast path.', CYAN),
+            ('Playback is the recording',
+             'Denoising runs only on the analysis copy. Spectral subtraction strips the '
+             'quiet partials that make a cup sound like a cup, so the audio you hear is '
+             'bit-identical to what was captured.', LILAC),
+            ('A contract, not a prompt',
+             'The model returns JSON validated against a schema: unknown objects dropped, '
+             'beats clamped, BPM bounded. A malformed reply degrades to rules instead of '
+             'reaching the audio engine.', PINK),
+            ('Melody refinement',
+             'A hummed line is cleaned, snapped to scale by at most a semitone, timed from '
+             'its own phrasing and octave-centred &mdash; gently, because over-correcting '
+             'removes what made it human.', MINT),
+        ])
+    + '</div>'
+    + '<div style="display:flex; gap:14px; margin-top:6px">'
+    + ''.join(
+        f'<div style="flex:1; background:#12161F; border:1px solid #2A3040; '
+        f'border-radius:12px; padding:18px 22px">'
+        f'<p style="font-family:{DISPLAY}; font-size:34px; font-weight:700; '
+        f'color:{c}; margin:0">{v}</p>'
+        f'<p style="font-size:19px; color:{MUTE}; margin:0">{l}</p></div>'
+        for v, l, c in [
+            ('651', 'lines of C++ / JNI', CYAN),
+            ('20,256', 'lines of TypeScript', LILAC),
+            ('17', 'test suites', PINK),
+            ('389', 'tests passing', MINT),
+            ('0', 'network calls', '#FBBF24'),
+        ])
+    + '</div></div>',
+    bg='#101018',
+))
+
 # 12 — rubric -------------------------------------------------------------
 rows = [
     ('End product quality', '30%',
