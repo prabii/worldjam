@@ -11,7 +11,8 @@ import { Worklets } from 'react-native-worklets-core';
 import { colors } from '@/theme';
 import { Glyph } from '@/components/ui/Glyph';
 import { DetectionTracker, parseDetections, type Detection } from '@/vision/detector';
-import { loadDetector, getModel } from '@/vision/nativeDetector';
+import { loadDetector } from '@/vision/nativeDetector';
+import type { TensorflowModel } from 'react-native-fast-tflite';
 
 interface Props {
   facing: 'back' | 'front';
@@ -47,7 +48,13 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
   const device = useCameraDevice(facing);
   const { hasPermission, requestPermission } = useCameraPermission();
   const { resize } = useResizePlugin();
-  const [ready, setReady] = useState(false);
+  /**
+   * The loaded model, held in state rather than fetched inside the frame
+   * processor. A worklet runs on its own runtime and cannot call a regular JS
+   * function, so `getModel()` threw "cannot be shared" on every frame. The
+   * model object itself is worklet-shareable, so closing over it works.
+   */
+  const [model, setModel] = useState<TensorflowModel | null>(null);
 
   // One tracker for the component's life, so smoothing survives re-renders.
   const tracker = useMemo(() => new DetectionTracker(), []);
@@ -59,7 +66,7 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
   useEffect(() => {
     let cancelled = false;
     void loadDetector().then((m) => {
-      if (!cancelled) setReady(m != null);
+      if (!cancelled) setModel(m);
     });
     return () => {
       cancelled = true;
@@ -97,7 +104,6 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
       if (last != null && now - last < MIN_INTERVAL_MS) return;
       (globalThis as Record<string, unknown>).__wjLastRun = now;
 
-      const model = getModel();
       if (model == null) return;
 
       try {
@@ -118,7 +124,7 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
         // A single bad frame must never take the camera down.
       }
     },
-    [detecting, resize, publish],
+    [detecting, resize, publish, model],
   );
 
   if (!device) {
@@ -147,7 +153,7 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
       torch={torch ? 'on' : 'off'}
       // Only attach the processor once the model exists, so early frames are
       // not spent calling into a null model.
-      frameProcessor={ready ? frameProcessor : undefined}
+      frameProcessor={model ? frameProcessor : undefined}
     />
   );
 }

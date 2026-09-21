@@ -8,6 +8,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BOTTOM_NAV_CLEARANCE } from '@/components/ui/BottomNav';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { ObjectIcon } from '@/components/ObjectIcon';
@@ -58,7 +59,7 @@ export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
       <ScrollView
         contentContainerStyle={[
           styles.scroll,
-          { paddingTop: insets.top + spacing.md, paddingBottom: insets.bottom + 110 },
+          { paddingTop: insets.top + spacing.md, paddingBottom: insets.bottom + BOTTOM_NAV_CLEARANCE },
         ]}
         showsVerticalScrollIndicator={false}
       >

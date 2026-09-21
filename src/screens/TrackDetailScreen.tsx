@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { BOTTOM_NAV_CLEARANCE } from '@/components/ui/BottomNav';
 import * as Haptics from 'expo-haptics';
 import { Logo } from '@/components/ui/Logo';
 import { Glyph } from '@/components/ui/Glyph';
@@ -102,7 +103,7 @@ export function TrackDetailScreen({ onBack, onKeepCreating, onAddSounds }: Props
       </View>
 
       <ScrollView
-        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 120 }]}
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + BOTTOM_NAV_CLEARANCE }]}
         showsVerticalScrollIndicator={false}
       >
         {/* ---- Title ---- */}

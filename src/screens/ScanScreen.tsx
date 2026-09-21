@@ -181,7 +181,7 @@ export function ScanScreen({ onBack, onAddToStudio, onOpenObject }: Props) {
       <StepBar current={1} />
 
       <ScrollView
-        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 110 }]}
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 28 }]}
         showsVerticalScrollIndicator={false}
       >
         {/* ---- Viewfinder ---- */}
