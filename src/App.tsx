@@ -10,6 +10,7 @@ import { ScanScreen } from '@/screens/ScanScreen';
 import { ObjectDetailScreen } from '@/screens/ObjectDetailScreen';
 import { MyJamsScreen } from '@/screens/MyJamsScreen';
 import { CreateJamScreen } from '@/screens/CreateJamScreen';
+import { TrackDetailScreen } from '@/screens/TrackDetailScreen';
 import { BottomNav, type NavTab } from '@/components/ui/BottomNav';
 import { useSession } from '@/state/sessionStore';
 import { JamScreen } from '@/screens/JamScreen';
@@ -17,7 +18,15 @@ import { nativeAvailable, startEngine, stopEngine } from '@/audio/engine';
 import { initModel, releaseModel } from '@/ai/modelLoader';
 import { colors, spacing, type } from '@/theme';
 
-type Screen = 'welcome' | 'home' | 'scan' | 'object' | 'jams' | 'create' | 'jam';
+type Screen =
+  | 'welcome'
+  | 'home'
+  | 'scan'
+  | 'object'
+  | 'jams'
+  | 'create'
+  | 'track'
+  | 'jam';
 
 export default function App() {
   // A demo dies if the screen sleeps mid-jam.
@@ -125,14 +134,20 @@ export default function App() {
           <ObjectDetailScreen
             objectId={objectId}
             onBack={() => setScreen('scan')}
-            onGenerate={() => setScreen('jam')}
+            onGenerate={() => setScreen('track')}
             onAddObject={() => setScreen('scan')}
+          />
+        ) : screen === 'track' ? (
+          <TrackDetailScreen
+            onBack={() => setScreen('jam')}
+            onKeepCreating={() => setScreen('scan')}
+            onAddSounds={() => setScreen('scan')}
           />
         ) : screen === 'create' ? (
           <CreateJamScreen
             onBack={() => setScreen('home')}
             onRecord={() => setScreen('scan')}
-            onGenerate={() => setScreen('jam')}
+            onGenerate={() => setScreen('track')}
           />
         ) : screen === 'jams' ? (
           <MyJamsScreen
