@@ -235,3 +235,38 @@ describe('DetectionTracker', () => {
     expect(t.size).toBe(0);
   });
 });
+
+describe('tensor-shaped input', () => {
+  /**
+   * The frame processor copies native output tensors into plain arrays before
+   * crossing the worklet bridge. It did not originally, and the objects that
+   * arrived had `length` undefined, so every detection was silently dropped —
+   * no error, no labels, on device only. These pin the shapes the parser must
+   * accept and what it does when they are wrong.
+   */
+  it('accepts Float32Array output, as the model actually returns', () => {
+    const boxes = new Float32Array([0.3, 0.2, 0.7, 0.6]);
+    const classes = new Float32Array([47]); // cup
+    const scores = new Float32Array([0.9]);
+    const dets = parseDetections(boxes, classes, scores, 1);
+    expect(dets).toHaveLength(1);
+    expect(dets[0].className).toBe('cup');
+  });
+
+  it('returns nothing rather than throwing on an empty buffer', () => {
+    expect(parseDetections(new Float32Array(), new Float32Array(), new Float32Array(), 0))
+      .toEqual([]);
+  });
+
+  it('never reads past the scores it was given', () => {
+    // A count larger than the data is exactly what a mis-read count tensor
+    // produces; it must not invent detections from undefined entries.
+    const dets = parseDetections(
+      new Float32Array([0.3, 0.2, 0.7, 0.6]),
+      new Float32Array([47]),
+      new Float32Array([0.9]),
+      25,
+    );
+    expect(dets).toHaveLength(1);
+  });
+});

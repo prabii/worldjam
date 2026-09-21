@@ -36,6 +36,9 @@ const INPUT = 320;
  */
 const MIN_INTERVAL_MS = 250;
 
+/** EfficientDet-Lite emits 25 candidate boxes per frame. */
+const MAX_RAW = 25;
+
 /**
  * The camera preview with live object detection.
  *
@@ -66,7 +69,8 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
   useEffect(() => {
     let cancelled = false;
     void loadDetector().then((m) => {
-      if (!cancelled) setModel(m);
+      if (cancelled) return;
+      setModel(m);
     });
     return () => {
       cancelled = true;
@@ -85,6 +89,9 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
       Worklets.createRunOnJS(
         (boxes: number[], classes: number[], scores: number[], count: number) => {
           const parsed = parseDetections(boxes, classes, scores, count);
+          // Temporary: the first few frames tell us whether the model is
+          // running at all and what it returns, which is the only way to tell
+          // "no objects in view" apart from "inference never happened".
           onDetections(tracker.update(parsed));
         },
       ),
@@ -114,10 +121,28 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
         });
 
         const out = model.runSync([resized]);
-        const boxes = out[0] as unknown as number[];
-        const classes = out[1] as unknown as number[];
-        const scores = out[2] as unknown as number[];
-        const count = (out[3] as unknown as number[])[0] ?? 0;
+
+        // The output tensors are native buffers. Passing them straight to JS
+        // hands over objects whose `length` reads as undefined on the other
+        // side, so every detection was silently dropped. Copying into plain
+        // arrays inside the worklet is what actually crosses the bridge.
+        const rawBoxes = out[0] as unknown as ArrayLike<number>;
+        const rawClasses = out[1] as unknown as ArrayLike<number>;
+        const rawScores = out[2] as unknown as ArrayLike<number>;
+        const rawCount = out[3] as unknown as ArrayLike<number>;
+
+        const n = Math.min(MAX_RAW, rawScores.length ?? 0);
+        if (n === 0) return;
+
+        const scores: number[] = [];
+        const classes: number[] = [];
+        const boxes: number[] = [];
+        for (let i = 0; i < n; i++) {
+          scores.push(rawScores[i]);
+          classes.push(rawClasses[i]);
+          boxes.push(rawBoxes[i * 4], rawBoxes[i * 4 + 1], rawBoxes[i * 4 + 2], rawBoxes[i * 4 + 3]);
+        }
+        const count = Math.min(n, Math.round(rawCount[0] ?? n));
 
         publish(boxes, classes, scores, count);
       } catch {

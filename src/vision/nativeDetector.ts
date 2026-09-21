@@ -27,14 +27,23 @@ export async function loadDetector(): Promise<TensorflowModel | null> {
   if (loading) return loading;
 
   loading = (async () => {
+    const startedAt = Date.now();
     try {
+      console.log('[worldjam] loading detector…');
       const loaded = await loadTensorflowModel(
         require('../../assets/models/efficientdet-lite.tflite'),
       );
       model = loaded;
+      console.log(
+        `[worldjam] detector ready in ${Date.now() - startedAt}ms; ` +
+          `inputs=${loaded.inputs?.length ?? '?'} outputs=${loaded.outputs?.length ?? '?'}`,
+      );
       return loaded;
     } catch (err) {
-      console.warn('[worldjam] detector failed to load:', err);
+      console.warn(
+        `[worldjam] detector failed to load after ${Date.now() - startedAt}ms:`,
+        err,
+      );
       return null;
     } finally {
       loading = null;
