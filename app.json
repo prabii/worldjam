@@ -26,6 +26,14 @@
         }
       ],
       [
+        "react-native-vision-camera",
+        {
+          "cameraPermissionText": "WorldJam uses the camera to find objects you can play.",
+          "enableMicrophonePermission": true,
+          "microphonePermissionText": "WorldJam records the real sound of the objects you tap."
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "android": {

@@ -114,13 +114,13 @@ export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
           style={styles.captureCard}
         >
           <Image
-            source={require('../../assets/home-reference.png')}
+            source={require('../../assets/hero-mug.png')}
             style={styles.captureBg}
             resizeMode="cover"
             accessible={false}
           />
           <LinearGradient
-            colors={['rgba(8,9,12,0.85)', 'rgba(8,9,12,0.45)', 'rgba(8,9,12,0.9)']}
+            colors={['rgba(8,9,12,0.78)', 'rgba(8,9,12,0.18)', 'rgba(8,9,12,0.72)']}
             style={StyleSheet.absoluteFill}
           />
 
@@ -128,13 +128,6 @@ export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
             <Text style={styles.captureTitle}>
               Point at an object{'\n'}to capture its sound
             </Text>
-
-            <View style={styles.reticle}>
-              <View style={[styles.corner, styles.tl]} />
-              <View style={[styles.corner, styles.tr]} />
-              <View style={[styles.corner, styles.bl]} />
-              <View style={[styles.corner, styles.br]} />
-            </View>
 
             <View style={styles.scanPill}>
               <View style={styles.scanDot} />
@@ -397,7 +390,7 @@ const styles = StyleSheet.create({
   tabSub: { ...type.caption, color: 'rgba(255,255,255,0.7)' },
 
   captureCard: {
-    height: 220,
+    height: 186,
     borderRadius: radius.lg,
     overflow: 'hidden',
     borderWidth: 1,

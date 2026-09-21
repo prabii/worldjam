@@ -55,6 +55,14 @@ export interface SessionSnapshot {
   bpmHint: number | null;
   style: Style;
   mood?: string;
+  /**
+   * A plain-language description of the sung or hummed melody, from
+   * describeMelody(). The model cannot hear the recording, so without this it
+   * is arranging blind and every result comes back generic.
+   */
+  melodyDescription?: string;
+  /** Reference artists the user named, to steer the production. */
+  reference?: string;
 }
 
 /**
@@ -82,23 +90,37 @@ export function buildPrompt(snapshot: SessionSnapshot, instruction?: string): st
       }
     : { present: false };
 
-  return `You are the music director for WorldJam. The user recorded the REAL sounds of physical objects around them. Your job is to arrange WHEN each object plays. You never generate audio.
+  const vocalDetail = snapshot.melodyDescription
+    ? `
+melody: ${snapshot.melodyDescription}`
+    : '';
+
+  return `You are the music producer for WorldJam. The user recorded the REAL sounds of physical objects around them, and may have sung or hummed a melody. Your job is to arrange WHEN each object plays and how the song is built around the voice. You never generate audio.
 
 SESSION:
 objects: ${JSON.stringify(objects)}
-vocal: ${JSON.stringify(vocal)}
+vocal: ${JSON.stringify(vocal)}${vocalDetail}
 tempo_hint: ${snapshot.bpmHint ?? 'none'}
-requested_style: ${snapshot.style}${snapshot.mood ? `\nmood: ${snapshot.mood}` : ''}${instruction ? `\nuser_instruction: "${instruction}"` : ''}
+requested_style: ${snapshot.style}${snapshot.mood ? `
+mood: ${snapshot.mood}` : ''}${snapshot.reference ? `
+reference_artists: ${snapshot.reference}` : ''}${instruction ? `
+user_instruction: "${instruction}"` : ''}
+
+HOW TO PRODUCE THIS:
+- If a melody is present, it is the song. Build everything else to support it: match its key, lock the tempo to it, and leave the beats where the voice is most exposed uncluttered.
+- Think in sections, not one repeated bar. A verse is sparse; a chorus adds the bass and more of the objects.
+- Give low, dark, long-decay objects the downbeats. Bright, short objects belong on offbeats and sixteenths, where they add movement rather than weight.
+- Leave space. Silence is what makes the objects that DO play sound deliberate. Not every object plays every bar.
+- Pick accompaniment that fits the voice: "bass" and "chords" almost always; "pad" for slow or emotional; "arp" for electronic; "guitar" for acoustic and pop.
 
 RULES:
 - Use ONLY the object names listed above. Never invent an object.
 - beats are 1-indexed within one 4/4 bar. Fractional values (e.g. 2.5) are allowed for offbeats.
-- bpm must be between 60 and 180.
-- Give low/dark objects the downbeats and bright/short objects the offbeats.
-- Leave space. Not every object plays on every beat.
+- bpm must be between 60 and 180. If a melody tempo is given, stay within 4 BPM of it.
+- voiceRole is "lead" when the user sang a tune, "harmony" when the voice should sit under other parts, "texture" for wordless atmosphere, "none" when there is no voice.
 
 Reply with ONLY this JSON, no prose:
-{"bpm":92,"bars":4,"objectPattern":[{"object":"cup","beats":[1,3]},{"object":"table","beats":[2,4]}],"voiceRole":"lead","accompaniment":["bass"],"style":"${snapshot.style}","reasoning":"one short sentence"}`;
+{"bpm":92,"bars":4,"objectPattern":[{"object":"cup","beats":[1,3]},{"object":"table","beats":[2,4]}],"voiceRole":"lead","accompaniment":["bass","chords"],"style":"${snapshot.style}","reasoning":"one short sentence"}`;
 }
 
 export interface PlanResult {

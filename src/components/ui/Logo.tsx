@@ -5,8 +5,12 @@ import { colors, type } from '@/theme';
 
 interface Props {
   size?: 'small' | 'medium' | 'large';
-  /** Shows "Turn Your World Into a Song" beneath the wordmark. */
-  tagline?: boolean;
+  /** Shows a line beneath the wordmark. `true` uses the splash tagline;
+   *  'studio' uses the letterspaced "ANYTHING CAN BE A STUDIO" from the
+   *  in-app headers. */
+  tagline?: boolean | 'studio';
+  /** Hides the equaliser glyph — the in-app headers show the wordmark alone. */
+  glyph?: boolean;
   /** Animates the bars, for the splash and loading states. */
   animated?: boolean;
 }
@@ -18,7 +22,7 @@ interface Props {
  * The equaliser bars carry the gradient; "Jam" is a solid brand purple. See
  * BrandWord below for why a true gradient text fill is not used.
  */
-export function Logo({ size = 'medium', tagline, animated }: Props) {
+export function Logo({ size = 'medium', tagline, animated, glyph = true }: Props) {
   const dims = SIZES[size];
   const bars = useRef(
     [0.5, 0.85, 0.35, 1, 0.6].map((v) => new Animated.Value(v)),
@@ -53,6 +57,7 @@ export function Logo({ size = 'medium', tagline, animated }: Props) {
     <View style={styles.wrap}>
       <View style={styles.row}>
         {/* Equaliser glyph */}
+        {glyph && (
         <View style={[styles.bars, { height: dims.bar }]}>
           {bars.map((v, i) => (
             <Animated.View key={i} style={styles.barClip}>
@@ -77,6 +82,7 @@ export function Logo({ size = 'medium', tagline, animated }: Props) {
             </Animated.View>
           ))}
         </View>
+        )}
 
         <View style={styles.word}>
           <Text style={[styles.world, { fontSize: dims.font }]}>World</Text>
@@ -84,11 +90,15 @@ export function Logo({ size = 'medium', tagline, animated }: Props) {
         </View>
       </View>
 
-      {tagline && (
+      {tagline === 'studio' ? (
+        <Text style={[styles.tagline, styles.studioTagline, { fontSize: dims.tagline }]}>
+          ANYTHING CAN BE A STUDIO
+        </Text>
+      ) : tagline ? (
         <Text style={[styles.tagline, { fontSize: dims.tagline }]}>
           Turn Your World Into a Song
         </Text>
-      )}
+      ) : null}
     </View>
   );
 }
@@ -128,4 +138,6 @@ const styles = StyleSheet.create({
     color: colors.textDim,
     letterSpacing: 1,
   },
+  /* The header lockup sets the tagline in wide caps across the wordmark. */
+  studioTagline: { letterSpacing: 3.2, color: 'rgba(244,245,247,0.55)' },
 });

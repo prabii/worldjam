@@ -31,6 +31,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { planToLoopEvents, transport } from '@/audio/transport';
 import { cleanCapture } from '@/dsp/denoise';
+import { describeMelody, refineMelody } from '@/dsp/melody';
 import { buildRhythmCues, describeCapture } from '@/audio/guidance';
 import { guidance, isGuidanceEnabled, setGuidanceEnabled, speakNow } from '@/audio/speech';
 import {
@@ -97,6 +98,13 @@ interface SessionState {
   accuracyAfter: number | null;
   lastPlanInfo: string | null;
   statusMessage: string | null;
+  /**
+   * Plain-language summary of the sung melody, built at capture time and
+   * handed to the model so it arranges around the actual tune.
+   */
+  melodyDescription: string | null;
+  /** Reference artists the user named, to steer the production. */
+  reference: string | null;
   /** AI-written lyrics for the current arrangement. */
   lyrics: LyricSet | null;
   writingLyrics: boolean;
@@ -138,6 +146,8 @@ interface SessionState {
   removeSession: (id: string) => Promise<void>;
   setStatus: (msg: string | null) => void;
   writeLyrics: (mood?: string) => Promise<void>;
+  /** Names artists or a sound to steer the production, e.g. "Charlie Puth". */
+  setReference: (ref: string | null) => void;
   /** Spoken guidance for accessibility and hands-free coaching. */
   guidanceOn: boolean;
   setGuidance: (on: boolean) => void;
@@ -164,6 +174,8 @@ export const useSession = create<SessionState>((set, get) => ({
   pcmBySlot: new Map(),
   loops: [],
   vocalTake: null,
+  melodyDescription: null,
+  reference: null,
   plan: null,
   bpm: 92,
   bars: 4,
@@ -319,6 +331,8 @@ export const useSession = create<SessionState>((set, get) => ({
     }
   },
 
+  setReference: (ref) => set({ reference: ref && ref.trim() ? ref.trim() : null }),
+
   setGuidance: (on) => {
     setGuidanceEnabled(on);
     set({ guidanceOn: on });
@@ -362,8 +376,15 @@ export const useSession = create<SessionState>((set, get) => ({
     if (target.kind === 'vocal') {
       // The raw voice is preserved untouched; analysis only describes it.
       const { pcm } = trimSilence(raw, sr, -50);
-      const notes = extractMelody(pcm, sr);
-      const key = detectKey(notes);
+      const rawNotes = extractMelody(pcm, sr);
+      const key = detectKey(rawNotes);
+
+      // A hummed line is never in tune or in time on its own. Refining it here
+      // means the note list the arranger and the lead synth read is already
+      // musical, rather than each of them having to correct it separately and
+      // possibly differently.
+      const refined = refineMelody(rawNotes, key);
+      const notes = refined.notes.length > 0 ? refined.notes : rawNotes;
 
       loadSample(SLOT_VOCAL, pcm, 1);
       get().pcmBySlot.set(SLOT_VOCAL, pcm);
@@ -379,6 +400,10 @@ export const useSession = create<SessionState>((set, get) => ({
       set({
         vocalTake: take,
         key,
+        // The hum's own tempo beats the default when the user has not played
+        // anything yet — the song should follow the voice, not the other way.
+        bpm: refined.notes.length >= 3 ? refined.bpm : get().bpm,
+        melodyDescription: refined.notes.length ? describeMelody(refined) : null,
         statusMessage: notes.length
           ? `Voice captured — ${notes.length} notes${key ? `, ${key}` : ''}`
           : 'Voice captured (no clear melody detected)',
@@ -526,6 +551,8 @@ export const useSession = create<SessionState>((set, get) => ({
         bpmHint,
         style: state.style,
         mood: undefined,
+        melodyDescription: state.melodyDescription ?? undefined,
+        reference: state.reference ?? undefined,
       },
       instruction,
     );
