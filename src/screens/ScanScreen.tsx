@@ -59,6 +59,7 @@ export function ScanScreen({ onBack, onAddToStudio, onOpenObject }: Props) {
   const beginCapture = useSession((s) => s.beginCapture);
   const finishCapture = useSession((s) => s.finishCapture);
   const renameObject = useSession((s) => s.renameObject);
+  const playObject = useSession((s) => s.playObject);
   const guidanceOn = useSession((s) => s.guidanceOn);
 
   const isRecording = recording?.kind === 'object';
@@ -297,14 +298,21 @@ export function ScanScreen({ onBack, onAddToStudio, onOpenObject }: Props) {
             </View>
           )}
 
-          {/* Captured objects first: these are real, with real audio. */}
+          {/* Captured objects first: these are real, with real audio.
+              Tapping plays the recording — that is the whole point of having
+              captured it, and it must stay instant. Details are a long press,
+              so a tap never navigates away from a sound the user wants to
+              hear again. */}
           {objects.map((o) => (
             <Pressable
               key={o.id}
               style={[styles.chip, { borderColor: o.color }]}
-              onPress={() => onOpenObject?.(o.id)}
+              onPress={() => playObject(o.id)}
+              onLongPress={() => onOpenObject?.(o.id)}
+              delayLongPress={350}
               accessibilityRole="button"
-              accessibilityLabel={`${o.label}, ${roleInfoFor(o.category).display}. Open details.`}
+              accessibilityLabel={`Play ${o.label}, ${roleInfoFor(o.category).display}`}
+              accessibilityHint="Double tap and hold to open details"
             >
               <View style={[styles.chipArt, { backgroundColor: o.color + '22' }]}>
                 <Glyph name="waveform" size={26} color={o.color} />

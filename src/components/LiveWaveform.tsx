@@ -12,13 +12,18 @@ interface Props {
 /**
  * The cyan→magenta capture waveform.
  *
+ * Twenty-two bars, animated by transform on the UI thread. An earlier version
+ * used 44 bars animating `height`, which cannot be natively driven: the result
+ * was dozens of bridge writes per frame, continuously, and buttons elsewhere
+ * on the screen responded visibly late.
+ *
  * The bars are decorative rather than a true meter: reading real levels would
  * mean pulling amplitude across the bridge every frame, which is exactly the
  * kind of per-frame traffic the audio path is designed to avoid. Their job is
  * to show that recording is happening, and a fixed envelope does that without
  * costing the capture anything.
  */
-export function LiveWaveform({ active, bars = 44, height = 56 }: Props) {
+export function LiveWaveform({ active, bars = 22, height = 56 }: Props) {
   // One Animated.Value per bar, created once.
   const values = useRef(
     Array.from({ length: bars }, () => new Animated.Value(0.15)),
@@ -42,7 +47,7 @@ export function LiveWaveform({ active, bars = 44, height = 56 }: Props) {
           toValue: 0.12,
           duration: 260,
           easing: Easing.out(Easing.quad),
-          useNativeDriver: false,
+          useNativeDriver: true,
         }),
       );
       Animated.parallel(settle).start();
@@ -57,13 +62,13 @@ export function LiveWaveform({ active, bars = 44, height = 56 }: Props) {
             toValue: peak * (0.45 + Math.random() * 0.55),
             duration: 150 + Math.random() * 180,
             easing: Easing.inOut(Easing.quad),
-            useNativeDriver: false,
+            useNativeDriver: true,
           }),
           Animated.timing(v, {
             toValue: peak * (0.18 + Math.random() * 0.35),
             duration: 150 + Math.random() * 180,
             easing: Easing.inOut(Easing.quad),
-            useNativeDriver: false,
+            useNativeDriver: true,
           }),
         ]);
 
@@ -83,10 +88,12 @@ export function LiveWaveform({ active, bars = 44, height = 56 }: Props) {
           style={[
             styles.barClip,
             {
-              height: v.interpolate({
-                inputRange: [0, 1],
-                outputRange: [3, height],
-              }),
+              height,
+              // scaleY is a transform, so this runs on the UI thread. Animating
+              // `height` forced useNativeDriver: false, which meant every frame
+              // of every bar crossed the bridge and made the whole screen feel
+              // laggy to touch.
+              transform: [{ scaleY: v }],
             },
           ]}
         >

@@ -18,7 +18,15 @@ import type {
  */
 
 const STYLES: Style[] = ['chill', 'jazz', 'lofi', 'cinematic', 'edm', 'rock'];
-const LAYERS: AccompanimentLayer[] = ['bass', 'chords', 'pad', 'arp', 'guitar', 'perc'];
+/**
+ * Accompaniment the model is allowed to ask for.
+ *
+ * 'perc' is deliberately absent even though the type permits it: the captured
+ * objects are the percussion, and a synthesised drum layer over them makes the
+ * track sound like it shipped with a backing loop. A model that asks for it
+ * gets it dropped rather than honoured.
+ */
+const LAYERS: AccompanimentLayer[] = ['bass', 'chords', 'pad', 'arp', 'guitar'];
 const VOICE_ROLES = ['lead', 'harmony', 'texture', 'none'] as const;
 
 export const BPM_MIN = 60;

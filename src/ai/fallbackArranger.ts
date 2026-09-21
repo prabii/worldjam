@@ -94,14 +94,21 @@ const STYLE_BPM: Record<Style, number> = {
  * their own, and a shaker/hat pattern underneath gives the loop a pulse
  * without competing with the real sounds. Sparse captures sounded empty
  * without it.
+ *
+ * Deliberately no 'perc' layer. The user's recorded objects ARE the
+ * percussion — laying a synthesised drum track over them makes the result
+ * sound like a backing track the app shipped with, which is the opposite of
+ * the product's promise that every sound is one you captured. Accompaniment
+ * is limited to the harmonic parts an object cannot supply: something to hold
+ * the low end and something to state the chords.
  */
 const STYLE_LAYERS: Record<Style, AccompanimentLayer[]> = {
-  chill: ['bass', 'chords', 'perc'],
-  jazz: ['bass', 'chords', 'perc'],
-  lofi: ['bass', 'chords', 'pad', 'perc'],
-  cinematic: ['pad', 'chords', 'perc'],
-  edm: ['bass', 'arp', 'perc'],
-  rock: ['bass', 'guitar', 'perc'],
+  chill: ['bass', 'chords'],
+  jazz: ['bass', 'chords'],
+  lofi: ['bass', 'chords'],
+  cinematic: ['pad'],
+  edm: ['bass', 'arp'],
+  rock: ['bass', 'guitar'],
 };
 
 /**
