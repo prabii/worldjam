@@ -106,6 +106,42 @@ describe('buildPrompt', () => {
     expect(buildPrompt(snapshot).length).toBeLessThan(2400);
   });
 
+
+  it('carries the melody description, which is all the model knows of the tune', () => {
+    const p = buildPrompt({
+      ...snapshot,
+      melodyDescription: 'Key: C major. Tempo around 96 BPM. The line rises.',
+    });
+    expect(p).toContain('C major');
+    expect(p).toContain('96 BPM');
+  });
+
+  it('omits the melody line entirely when nothing was sung', () => {
+    expect(buildPrompt(snapshot)).not.toContain('melody:');
+  });
+
+  it('passes reference artists through', () => {
+    const p = buildPrompt({ ...snapshot, reference: 'Charlie Puth' });
+    expect(p).toContain('Charlie Puth');
+  });
+
+  it('tells the model to build around the voice when there is one', () => {
+    const p = buildPrompt({
+      ...snapshot,
+      melodyDescription: 'Key: A minor.',
+    });
+    expect(p.toLowerCase()).toContain('melody is present');
+  });
+
+  it('stays compact even with melody and reference attached', () => {
+    const p = buildPrompt({
+      ...snapshot,
+      melodyDescription: 'Key: C major. Tempo around 96 BPM. 12 notes over 4.2s.',
+      reference: 'Charlie Puth, Justin Bieber',
+    });
+    expect(p.length).toBeLessThan(3000);
+  });
+
   it('passes a user instruction through', () => {
     expect(buildPrompt(snapshot, 'make it jazz')).toContain('make it jazz');
   });
