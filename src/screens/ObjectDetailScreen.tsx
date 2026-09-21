@@ -15,7 +15,9 @@ import { Glyph } from '@/components/ui/Glyph';
 import { GradientButton } from '@/components/ui/GradientButton';
 import { SegmentTabs, type SegmentTab } from '@/components/ui/SegmentTabs';
 import { TempoSlider } from '@/components/ui/TempoSlider';
+import { LayerSlider } from '@/components/ui/LayerSlider';
 import { Waveform } from '@/components/Waveform';
+import { ArrangeTimeline } from '@/components/ArrangeTimeline';
 import { useSession } from '@/state/sessionStore';
 import { roleInfoFor } from '@/vision/objectRoles';
 import { colors } from '@/theme';
@@ -42,9 +44,8 @@ const STYLES: Array<{ key: Style; label: string; colors: [string, string] }> = [
 
 const TABS: SegmentTab[] = [
   { key: 'compose', icon: 'music', label: 'Compose', sub: 'Create Music' },
-  { key: 'effects', icon: 'filter', label: 'Effects', sub: 'Add Magic' },
+  { key: 'arrange', icon: 'grid', label: 'Arrange', sub: 'Build Your Jam' },
   { key: 'mix', icon: 'target', label: 'Mix', sub: 'Blend Sounds' },
-  { key: 'export', icon: 'export', label: 'Export', sub: 'Share Your Jam' },
 ];
 
 /**
@@ -67,6 +68,8 @@ export function ObjectDetailScreen({ objectId, onBack, onGenerate, onAddObject }
   const bpm = useSession((s) => s.bpm);
   const style = useSession((s) => s.style);
   const arranging = useSession((s) => s.arranging);
+  const loops = useSession((s) => s.loops);
+  const setObjectVolume = useSession((s) => s.setObjectVolume);
   const playObject = useSession((s) => s.playObject);
   const removeObject = useSession((s) => s.removeObject);
   const renameObject = useSession((s) => s.renameObject);
@@ -74,6 +77,7 @@ export function ObjectDetailScreen({ objectId, onBack, onGenerate, onAddObject }
   const setReference = useSession((s) => s.setReference);
   const arrange = useSession((s) => s.arrange);
 
+  const loop = loops.find((l) => l.id === 'plan') ?? null;
   const object = objects.find((o) => o.id === objectId) ?? objects[0];
   const others = objects.filter((o) => o.id !== object?.id);
 
@@ -184,6 +188,48 @@ export function ObjectDetailScreen({ objectId, onBack, onGenerate, onAddObject }
 
         <SegmentTabs tabs={TABS} active={tab} onSelect={setTab} />
 
+        {tab === 'arrange' ? (
+          <View style={styles.tabPanel}>
+            <View style={styles.sectionTitleWrap}>
+              <Text style={styles.sectionTitle}>Arrange</Text>
+              <Text style={styles.sectionSub}>
+                {loop
+                  ? 'Every block is a beat the arrangement plays.'
+                  : 'Generate a jam and the timeline fills in.'}
+              </Text>
+            </View>
+            <ArrangeTimeline
+              objects={objects}
+              loop={loop}
+              bpm={bpm}
+              playheadBeat={null}
+              onSelectObject={() => {}}
+              onAddObject={onAddObject}
+            />
+          </View>
+        ) : tab === 'mix' ? (
+          <View style={styles.tabPanel}>
+            <View style={styles.sectionTitleWrap}>
+              <Text style={styles.sectionTitle}>Mix</Text>
+              <Text style={styles.sectionSub}>Set how loud each object sits.</Text>
+            </View>
+            {objects.length === 0 ? (
+              <Text style={styles.sectionSub}>Nothing recorded yet.</Text>
+            ) : (
+              objects.map((o) => (
+                <LayerSlider
+                  key={o.id}
+                  icon="waveform"
+                  label={o.label}
+                  value={o.volume}
+                  onChange={(v) => setObjectVolume(o.id, v)}
+                  accent={o.color}
+                />
+              ))
+            )}
+          </View>
+        ) : (
+          <>
         {/* ---- Generated sound ---- */}
         <View style={styles.sectionHead}>
           <View style={styles.sectionTitleWrap}>
@@ -350,6 +396,9 @@ export function ObjectDetailScreen({ objectId, onBack, onGenerate, onAddObject }
           ))}
         </ScrollView>
 
+          </>
+        )}
+
         <GradientButton
           label={arranging ? 'Composing…' : 'Generate My Jam'}
           trailing={arranging ? undefined : '→'}
@@ -450,6 +499,7 @@ const styles = StyleSheet.create({
   traitText: { fontSize: 12, fontWeight: '600', color: colors.text },
   blurb: { fontSize: 14, color: colors.textDim, lineHeight: 20 },
 
+  tabPanel: { gap: 14 },
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitleWrap: { gap: 3 },
   sectionTitle: { fontSize: 20, fontWeight: '700', color: colors.text, letterSpacing: -0.3 },
