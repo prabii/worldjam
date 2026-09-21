@@ -29,7 +29,8 @@ import { renderLayer } from '@/audio/synth';
 import { encodeWav, mixSession, toBase64 } from '@/audio/render';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
-import { planToLoopEvents, transport } from '@/audio/transport';
+import { transport } from '@/audio/transport';
+import { renderArrangement } from '@/audio/arrangement';
 import { cleanCapture } from '@/dsp/denoise';
 import { describeMelody, refineMelody } from '@/dsp/melody';
 import { buildRhythmCues, describeCapture } from '@/audio/guidance';
@@ -840,10 +841,16 @@ function applyPlan(
 ): void {
   const state = get();
 
-  const labelToId = new Map<string, string>();
-  for (const o of state.objects) labelToId.set(o.label.toLowerCase(), o.id);
-
-  const objectEvents = planToLoopEvents(plan.objectPattern, labelToId, plan.bars);
+  // The arrangement is rendered across the whole form rather than repeating
+  // one bar: sections thin parts out, accent the downbeats and put a fill on
+  // each turnaround. Repeating a single bar at a flat velocity is what made a
+  // jam sound like a loop instead of a piece of music.
+  const objectEvents = renderArrangement({
+    objects: state.objects,
+    objectPattern: plan.objectPattern,
+    totalBars: plan.bars,
+    style: plan.style,
+  });
 
   // Render accompaniment. Each layer becomes one long sample fired once at the
   // top of the loop, so it costs the same as a single object hit rather than
