@@ -157,6 +157,43 @@ export function formatGemmaPrompt(prompt: string): string {
 export const GEMMA4_STOPS = ['<turn|>', '<|turn>', '<|channel>', '<eos>'];
 
 /**
+ * Qwen's ChatML template.
+ *
+ * `/no_think` is appended because Qwen3 opens a reasoning block by default.
+ * Left on, it spends the whole token budget thinking and returns prose rather
+ * than the JSON object the arranger needs.
+ */
+export function formatQwenPrompt(prompt: string): string {
+  return `<|im_start|>user
+${prompt} /no_think<|im_end|>
+<|im_start|>assistant
+`;
+}
+
+export const QWEN_STOPS = ['<|im_end|>', '<|im_start|>', '<|endoftext|>'];
+
+/**
+ * Picks the chat template from the model file's name.
+ *
+ * Reading the template from the GGUF metadata would be better, but llama.rn
+ * does not expose it before the context is built. Every published GGUF carries
+ * its family in the filename, so that is the signal, and the fallback is
+ * Gemma's template — what the project shipped with.
+ *
+ * Using the wrong template does not error. The model just produces worse
+ * output, which is exactly why it is worth naming here.
+ */
+export function promptFormatterFor(modelPath: string): {
+  format: (prompt: string) => string;
+  stops: string[];
+} {
+  if (modelPath.toLowerCase().includes('qwen')) {
+    return { format: formatQwenPrompt, stops: QWEN_STOPS };
+  }
+  return { format: formatGemmaPrompt, stops: GEMMA4_STOPS };
+}
+
+/**
  * Common locations a GGUF may sit on an Android device.
  *
  * Checked in order by the model picker. App-private storage is preferred:

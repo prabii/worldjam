@@ -126,6 +126,8 @@ interface SessionState {
   /** Names an object after its sound has been captured. */
   renameObject: (id: string, label: string) => void;
   playObject: (id: string) => void;
+  /** Fires every captured object together, so the kit can be heard as one. */
+  playAllObjects: () => void;
   setObjectVolume: (id: string, volume: number) => void;
   arrange: (instruction?: string) => Promise<void>;
   applyStyle: (style: Style) => Promise<void>;
@@ -499,6 +501,28 @@ export const useSession = create<SessionState>((set, get) => ({
       objects: s.objects.map((o) => (o.id === id ? { ...o, label: unique } : o)),
       lastExportPath: null,
     }));
+  },
+
+  /**
+   * Fires every captured object at once.
+   *
+   * Recording several things and only ever hearing them one at a time hides
+   * the whole point of the app. This is not an arrangement — it is the "what
+   * do my sounds sound like together" button, available the moment there are
+   * two of them and long before anything has been generated.
+   *
+   * A few milliseconds of stagger keeps the hits from summing into one
+   * transient and clipping, and sounds like a strum rather than a stack.
+   */
+  playAllObjects: () => {
+    const { objects } = get();
+    objects.forEach((obj, i) => {
+      if (i === 0) {
+        trigger(obj.slot, obj.volume, obj.pan);
+        return;
+      }
+      setTimeout(() => trigger(obj.slot, obj.volume, obj.pan), i * 45);
+    });
   },
 
   playObject: (id) => {

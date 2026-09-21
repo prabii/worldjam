@@ -60,6 +60,7 @@ export function ScanScreen({ onBack, onAddToStudio, onOpenObject }: Props) {
   const finishCapture = useSession((s) => s.finishCapture);
   const renameObject = useSession((s) => s.renameObject);
   const playObject = useSession((s) => s.playObject);
+  const playAllObjects = useSession((s) => s.playAllObjects);
   const guidanceOn = useSession((s) => s.guidanceOn);
 
   const isRecording = recording?.kind === 'object';
@@ -274,15 +275,32 @@ export function ScanScreen({ onBack, onAddToStudio, onOpenObject }: Props) {
           <Text style={styles.sectionTitle}>
             {objects.length > 0 ? 'Your Objects' : 'Detected Objects'}
           </Text>
-          <Pressable
-            style={styles.addManual}
-            onPress={() => startCapture(null)}
-            accessibilityRole="button"
-            accessibilityLabel="Add an object manually"
-          >
-            <Text style={styles.addManualText}>Add Manually</Text>
-            <Glyph name="plus" size={14} color={colors.text} />
-          </Pressable>
+          <View style={styles.headActions}>
+            {objects.length > 1 && (
+              <Pressable
+                style={styles.playAll}
+                onPress={() => {
+                  Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+                  playAllObjects();
+                }}
+                accessibilityRole="button"
+                accessibilityLabel={`Play all ${objects.length} sounds together`}
+              >
+                <Glyph name="play" size={13} color="#C4B5FD" />
+                <Text style={styles.playAllText}>Play All</Text>
+              </Pressable>
+            )}
+
+            <Pressable
+              style={styles.addManual}
+              onPress={() => startCapture(null)}
+              accessibilityRole="button"
+              accessibilityLabel="Add an object manually"
+            >
+              <Text style={styles.addManualText}>Add</Text>
+              <Glyph name="plus" size={14} color={colors.text} />
+            </Pressable>
+          </View>
         </View>
 
         <ScrollView
@@ -527,6 +545,19 @@ const styles = StyleSheet.create({
 
   sectionHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   sectionTitle: { fontSize: 19, fontWeight: '700', color: colors.text, letterSpacing: -0.3 },
+  headActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  playAll: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 8,
+    paddingHorizontal: 13,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(168,85,247,0.55)',
+    backgroundColor: 'rgba(30,20,50,0.85)',
+  },
+  playAllText: { fontSize: 13, fontWeight: '700', color: '#DDD6FE' },
   addManual: {
     flexDirection: 'row',
     alignItems: 'center',

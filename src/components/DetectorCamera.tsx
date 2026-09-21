@@ -79,7 +79,15 @@ export function DetectorCamera({ facing, torch, detecting, onDetections }: Props
   const tracker = useMemo(() => new DetectionTracker(), []);
 
   useEffect(() => {
-    if (!hasPermission) void requestPermission();
+    // Requested on a tick rather than during mount. Asking immediately runs
+    // before the Activity is attached on some devices, which surfaces as
+    // "Tried to use permissions API while not attached to an Activity" —
+    // a red banner over every screen.
+    if (hasPermission) return;
+    const id = setTimeout(() => {
+      void requestPermission().catch(() => {});
+    }, 0);
+    return () => clearTimeout(id);
   }, [hasPermission, requestPermission]);
 
   useEffect(() => {

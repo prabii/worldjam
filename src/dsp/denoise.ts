@@ -97,20 +97,42 @@ export function findTransientWindow(
   // 10 ms of pre-roll preserves the very front of the attack.
   start = Math.max(0, start - Math.floor(sampleRate * 0.01));
 
-  // Walk forward until the tail decays back into the noise.
+  /*
+   * Walk forward until the tail decays back into the noise.
+   *
+   * The gate here is deliberately far below the one used to FIND the hit. A
+   * struck cup or bottle rings well under the onset threshold for a long time,
+   * and that ring is most of what makes the object recognisable. Cutting at
+   * the onset threshold left roughly 80 ms — a click where a sound should be,
+   * which played back as a different, thinner object than the one recorded.
+   */
+  const tailThreshold = Math.max(noiseFloor * 1.5, threshold * 0.12);
   let end = pcm.length;
   let quietRun = 0;
-  const quietNeeded = Math.floor(sampleRate * 0.08 / hop); // 80 ms of quiet
+  // 180 ms of continuous quiet before calling the sound over, so a gap between
+  // two rings inside one hit does not truncate it.
+  const quietNeeded = Math.max(1, Math.floor((sampleRate * 0.18) / hop));
+
   for (let i = peakIdx; i + hop <= pcm.length; i += hop) {
-    if (rms(pcm, i, i + hop) < threshold) {
+    if (rms(pcm, i, i + hop) < tailThreshold) {
       quietRun++;
       if (quietRun >= quietNeeded) {
-        end = Math.min(pcm.length, i + hop);
+        // Back off to where the quiet run began, then keep a short release so
+        // the decay is not chopped at the moment it crosses the gate.
+        const quietStarted = i - (quietRun - 1) * hop;
+        end = Math.min(pcm.length, quietStarted + Math.floor(sampleRate * 0.06));
         break;
       }
     } else {
       quietRun = 0;
     }
+  }
+
+  // Never hand back less than a quarter second when that much was recorded:
+  // below that an object stops sounding like itself.
+  const minLength = Math.floor(sampleRate * 0.25);
+  if (end - start < minLength) {
+    end = Math.min(pcm.length, start + minLength);
   }
 
   return { start, end };

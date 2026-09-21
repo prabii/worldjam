@@ -157,3 +157,68 @@ describe('cleanCapture', () => {
     expect(result.pcm.length).toBeGreaterThan(0);
   });
 });
+
+describe('transient window keeps the sound intact', () => {
+  const SR = 48000;
+
+  /** A struck object: sharp attack, long exponential ring, over room noise. */
+  function struckObject(ringSeconds: number): number[] {
+    const total = Math.floor(SR * (0.3 + ringSeconds + 0.3));
+    const out = new Array<number>(total);
+    const onset = Math.floor(SR * 0.3);
+    for (let i = 0; i < total; i++) {
+      // Room tone everywhere.
+      let v = (Math.random() - 0.5) * 0.002;
+      if (i >= onset) {
+        const t = (i - onset) / SR;
+        // Ring that decays over `ringSeconds`, like a cup or bottle.
+        const env = Math.exp(-t * (5 / ringSeconds));
+        v += Math.sin(2 * Math.PI * 720 * t) * 0.5 * env;
+      }
+      out[i] = v;
+    }
+    return out;
+  }
+
+  it('keeps the ring, not just the attack', () => {
+    // The bug: the window closed ~80ms after the peak, so a cup that rings
+    // for a second came back as a 0.1s click and played as a different,
+    // thinner object than the one recorded.
+    const pcm = struckObject(1.0);
+    const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR));
+    expect(w).not.toBeNull();
+
+    const seconds = (w!.end - w!.start) / SR;
+    expect(seconds).toBeGreaterThan(0.4);
+  });
+
+  it('never returns a clip too short to recognise', () => {
+    for (const ring of [0.05, 0.2, 0.5, 1.0, 2.0]) {
+      const pcm = struckObject(ring);
+      const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR));
+      if (!w) continue;
+      expect((w.end - w.start) / SR).toBeGreaterThanOrEqual(0.24);
+    }
+  });
+
+  it('starts at or before the attack', () => {
+    const pcm = struckObject(0.8);
+    const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR));
+    // Onset is at 0.3s; the window must not begin after it.
+    expect(w!.start / SR).toBeLessThanOrEqual(0.3);
+  });
+
+  it('stays inside the buffer it was given', () => {
+    const pcm = struckObject(0.5);
+    const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR));
+    expect(w!.start).toBeGreaterThanOrEqual(0);
+    expect(w!.end).toBeLessThanOrEqual(pcm.length);
+    expect(w!.end).toBeGreaterThan(w!.start);
+  });
+
+  it('cleanCapture preserves a recognisable length end to end', () => {
+    const pcm = struckObject(1.0);
+    const { pcm: cleaned } = cleanCapture(pcm, SR);
+    expect(cleaned.length / SR).toBeGreaterThan(0.3);
+  });
+});

@@ -4,6 +4,7 @@ import {
   MODEL_SEARCH_PATHS,
   createLlamaRuntime,
   formatGemmaPrompt,
+  promptFormatterFor,
   type LlamaRuntimeHandle,
 } from '@/ai/runtimes/llamaRuntime';
 
@@ -57,6 +58,10 @@ function fileSizeMb(info: FileSystem.FileInfo): number {
  * the directory is listable, which scoped storage does not guarantee.
  */
 const CANDIDATE_NAMES = [
+  // Qwen3 1.7B first: at 1.1 GB it is the one that actually fits a mid-range
+  // phone. Gemma 4 E2B is 3.35 GB and cannot load on a device with ~2 GB free.
+  'Qwen3-1.7B-Q4_K_M.gguf',
+  'qwen3-1.7b-q4_k_m.gguf',
   'gemma-4-E2B_q4_0-it.gguf',
   'gemma-4-E2B-it-qat-q4_0.gguf',
   'gemma-4-E2B-it-q4_0.gguf',
@@ -183,12 +188,17 @@ export async function initModel(explicitPath?: string): Promise<void> {
     const runtime = createLlamaRuntime({ modelPath: found.path });
     await runtime.load();
 
-    // Wrap generate() in Gemma's chat template. The orchestrator builds a
-    // plain instruction; the template belongs to the runtime, not the prompt.
+    // Wrap generate() in the model's own chat template. The orchestrator
+    // builds a plain instruction; the template belongs to the runtime.
+    // Chosen from the file name, so dropping a Qwen GGUF on the device works
+    // without a code change — the wrong template does not error, it just
+    // quietly degrades the output.
+    const { format } = promptFormatterFor(found.path);
+
     registerGemmaRuntime({
       name: runtime.name,
       isReady: () => runtime.isReady(),
-      generate: (prompt, maxTokens) => runtime.generate(formatGemmaPrompt(prompt), maxTokens),
+      generate: (prompt, maxTokens) => runtime.generate(format(prompt), maxTokens),
     });
 
     handle = runtime;
