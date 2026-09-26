@@ -1,8 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Animated,
   Dimensions,
-  Easing,
   Keyboard,
   KeyboardAvoidingView,
   Platform,
@@ -30,36 +28,44 @@ interface Props {
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const LANE_COUNT = 3;
-const TILE_H = 80;
-// Piano blocks at bottom — tall enough to tap with a foot
-const PIANO_H = 180;
-// Any tile that hasn't fully passed the piano top counts as hittable
-// (distance from piano top to screen bottom = PIANO_H + insets.bottom)
+const TILE_H = 86;
+/** Height of the AR floor pads at the bottom — big enough for a foot. */
+const PAD_H = 190;
+/**
+ * How far above the pad top a tile still counts as a hit.
+ * A foot is coarse and slow, so this is deliberately generous.
+ */
+const HIT_ABOVE = 170;
+/** How far past the pad top a late tile still counts. */
+const HIT_BELOW = 120;
 const LEADERBOARD_PATH = `${FileSystem.documentDirectory}worldjam-leaderboard.json`;
 
-// Beat source modes
 type BeatSource = 'grid' | 'jam' | 'ai';
+type Step = 'name' | 'source' | 'ready' | 'playing' | 'over';
 
 interface BeatHit {
   objectId: string;
   label: string;
-  color: string;
   lane: number;
+  /** Absolute beat position within the loop. */
   beatTime: number;
 }
 
+/**
+ * A tile in flight.
+ *
+ * Position is stored as a plain number and advanced by the rAF loop rather
+ * than by Animated: the hit test has to read the true on-screen position
+ * every frame, and a native-driven Animated.Value cannot be read from JS.
+ */
 interface Tile {
   id: number;
   lane: number;
   label: string;
-  color: string;
-  y: Animated.Value;
-  spawnedAt: number;
-  targetMs: number;
+  /** Milliseconds (performance clock) at which this tile reaches the pad. */
+  dueAt: number;
   hit: boolean;
   missed: boolean;
-  /** Cached numeric Y for hit detection — updated from Animated value. */
-  currentY: number;
 }
 
 interface LeaderboardEntry {
@@ -83,221 +89,159 @@ async function saveLeaderboard(entries: LeaderboardEntry[]): Promise<void> {
   await FileSystem.writeAsStringAsync(LEADERBOARD_PATH, JSON.stringify(sorted));
 }
 
-// LANE COLORS — vivid, distinct per lane
 const LANE_PALETTE = [
-  { base: '#0A84FF', dim: 'rgba(10,132,255,0.18)', glow: 'rgba(10,132,255,0.5)' },   // blue
-  { base: '#30D158', dim: 'rgba(48,209,88,0.18)',  glow: 'rgba(48,209,88,0.5)' },    // green
-  { base: '#FF453A', dim: 'rgba(255,69,58,0.18)',  glow: 'rgba(255,69,58,0.5)' },    // red
+  { base: '#0A84FF', soft: 'rgba(10,132,255,0.22)', glow: 'rgba(10,132,255,0.45)' },
+  { base: '#30D158', soft: 'rgba(48,209,88,0.22)', glow: 'rgba(48,209,88,0.45)' },
+  { base: '#BF5AF2', soft: 'rgba(191,90,242,0.22)', glow: 'rgba(191,90,242,0.45)' },
 ];
 
 export function PlayScreen({ onBack }: Props) {
   const insets = useSafeAreaInsets();
+
   const objects = useSession((s) => s.objects);
   const grid = useSession((s) => s.grid);
   const bpm = useSession((s) => s.bpm);
   const bars = useSession((s) => s.bars);
   const plan = useSession((s) => s.plan);
+  const arranging = useSession((s) => s.arranging);
+  const arrange = useSession((s) => s.arrange);
   const savedSessions = useSession((s) => s.savedSessions);
+  const refreshSessions = useSession((s) => s.refreshSessions);
   const openSession = useSession((s) => s.openSession);
   const playObject = useSession((s) => s.playObject);
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
-  const [arEnabled, setArEnabled] = useState(false);
+  const [arOn, setArOn] = useState(false);
 
-  // Setup flow
-  const [step, setStep] = useState<'name' | 'source' | 'ready' | 'playing' | 'over'>('name');
+  const [step, setStep] = useState<Step>('name');
   const [playerName, setPlayerName] = useState('');
   const [beatSource, setBeatSource] = useState<BeatSource>('grid');
   const [selectedJam, setSelectedJam] = useState<SessionSummary | null>(null);
-  const [loadingJam, setLoadingJam] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  // Game state
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
   const [maxCombo, setMaxCombo] = useState(0);
   const [misses, setMisses] = useState(0);
-  const [tiles, setTiles] = useState<Tile[]>([]);
-  const [pressedLane, setPressedLane] = useState<number | null>(null);
-  const [hitEffect, setHitEffect] = useState<{ lane: number; type: 'perfect' | 'good' | 'ok' } | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
 
-  // Lane labels — 3 objects mapped to 3 lanes
-  const laneObjects = useMemo(() => {
-    const objs = objects.slice(0, LANE_COUNT);
-    while (objs.length < LANE_COUNT) objs.push(null as any);
-    return objs;
-  }, [objects]);
+  /** Tiles currently in flight. Mutated in place by the rAF loop. */
+  const tilesRef = useRef<Tile[]>([]);
+  /** Bumped once per frame to re-render tile positions. */
+  const [, forceFrame] = useState(0);
+  const [padFlash, setPadFlash] = useState<{ lane: number; kind: string } | null>(null);
+  const [pressedLane, setPressedLane] = useState<number | null>(null);
 
-  const laneLabels = useMemo(
-    () => laneObjects.map((o, i) => o?.label ?? `Lane ${i + 1}`),
-    [laneObjects],
-  );
-
-  const tileId = useRef(0);
-  const spawnIndex = useRef(0);
-  const spawnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const gameStart = useRef(0);
+  const rafRef = useRef<number | null>(null);
+  const nextSpawn = useRef(0);
+  const startedAt = useRef(0);
+  const nextTileId = useRef(0);
   const scoreRef = useRef(0);
   const comboRef = useRef(0);
   const maxComboRef = useRef(0);
-  const missesRef = useRef(0);
-  const pianoTopRef = useRef(SCREEN_H - 200);
+  const missRef = useRef(0);
+  const overRef = useRef(false);
 
-  // Piano block dimensions
-  const pianoTop = SCREEN_H - insets.bottom - PIANO_H;
-  pianoTopRef.current = pianoTop;
+  const padTop = SCREEN_H - insets.bottom - PAD_H;
   const laneW = SCREEN_W / LANE_COUNT;
-  // Tiles hit zone is just above the piano blocks
-  const hitZoneY = pianoTop - TILE_H / 2;
+  /** Seconds a tile takes to travel from spawn to the pad line. */
+  const travelMs = useMemo(() => Math.max(1400, (60000 / bpm) * 3), [bpm]);
 
   useEffect(() => {
     void loadLeaderboard().then(setLeaderboard);
-  }, []);
+    void refreshSessions();
+  }, [refreshSessions]);
 
-  const requestAR = useCallback(async () => {
-    if (!cameraPermission?.granted) {
-      const res = await requestCameraPermission();
-      if (res.granted) setArEnabled(true);
-    } else {
-      setArEnabled((v) => !v);
-    }
-  }, [cameraPermission, requestCameraPermission]);
+  /** Objects mapped one per lane, so every lane has a distinct sound. */
+  const laneObjects = useMemo(() => {
+    const out: (typeof objects[number] | null)[] = [];
+    for (let i = 0; i < LANE_COUNT; i++) out.push(objects[i] ?? null);
+    return out;
+  }, [objects]);
 
-  const fallDuration = useMemo(() => (60000 / bpm) * 3.5, [bpm]);
+  const laneLabels = useMemo(
+    () => laneObjects.map((o, i) => o?.label ?? ['Left', 'Centre', 'Right'][i]),
+    [laneObjects],
+  );
 
-  // Build beat sequence from current grid or plan
+  // ── Beat sequence ─────────────────────────────────────────────────────────
+
   const beatSequence = useMemo((): BeatHit[] => {
     const hits: BeatHit[] = [];
 
+    /** Stable lane for an object: its index in the captured list. */
+    const laneFor = (objectId: string, fallback: number) => {
+      const i = objects.findIndex((o) => o.id === objectId);
+      return i >= 0 ? i % LANE_COUNT : fallback % LANE_COUNT;
+    };
+
     if (beatSource === 'ai' && plan) {
-      // Use AI plan's objectPattern
       plan.objectPattern.forEach((entry, idx) => {
-        const obj = objects.find((o) => o.label.toLowerCase() === entry.object.toLowerCase());
-        entry.beats.forEach((b) => {
+        const obj = objects.find(
+          (o) => o.label.toLowerCase() === entry.object.toLowerCase(),
+        );
+        for (const b of entry.beats) {
           hits.push({
-            objectId: obj?.id ?? `ai-${idx}`,
+            objectId: obj?.id ?? '',
             label: entry.object,
-            color: obj?.color ?? LANE_PALETTE[idx % LANE_COUNT].base,
-            lane: idx % LANE_COUNT,
+            lane: obj ? laneFor(obj.id, idx) : idx % LANE_COUNT,
             beatTime: b - 1,
           });
-        });
+        }
       });
     } else if (gridHitCount(grid) > 0 && objects.length > 0) {
-      // Use grid
       const rows = gridRows(grid, objects);
       const unit = stepBeats(grid.steps);
       for (let bar = 0; bar < bars; bar++) {
-        rows.forEach(({ object, row }, rowIdx) => {
-          row.forEach((on, step) => {
+        rows.forEach(({ object, row }) => {
+          row.forEach((on, s) => {
             if (!on) return;
             hits.push({
               objectId: object.id,
               label: object.label,
-              color: object.color,
-              lane: rowIdx % LANE_COUNT,
-              beatTime: bar * 4 + step * unit,
+              lane: laneFor(object.id, 0),
+              beatTime: bar * 4 + s * unit,
             });
           });
         });
       }
-    } else {
-      // Fallback: simple 3-lane pattern
-      for (let beat = 0; beat < bars * 4; beat += 1) {
+    }
+
+    // Nothing programmed: build a playable four-on-the-floor so the game
+    // always has something to play rather than standing empty.
+    if (hits.length === 0) {
+      const total = Math.max(bars, 2) * 4;
+      for (let b = 0; b < total; b++) {
+        const lane = b % LANE_COUNT;
         hits.push({
-          objectId: '', label: `Beat ${beat + 1}`,
-          color: LANE_PALETTE[beat % LANE_COUNT].base,
-          lane: beat % LANE_COUNT, beatTime: beat,
+          objectId: laneObjects[lane]?.id ?? '',
+          label: laneLabels[lane],
+          lane,
+          beatTime: b,
         });
+        // A syncopated off-beat every other bar keeps it from feeling flat.
+        if (b % 4 === 2) {
+          const l2 = (b + 1) % LANE_COUNT;
+          hits.push({
+            objectId: laneObjects[l2]?.id ?? '',
+            label: laneLabels[l2],
+            lane: l2,
+            beatTime: b + 0.5,
+          });
+        }
       }
     }
 
     return hits.sort((a, b) => a.beatTime - b.beatTime);
-  }, [grid, objects, bars, plan, beatSource]);
+  }, [grid, objects, bars, plan, beatSource, laneObjects, laneLabels]);
 
-  // Hit window: tile is hittable from when it enters the top of the piano block
-  // down to when it exits the bottom of the screen.
-  const hitWindowTop = useCallback(() => pianoTopRef.current - TILE_H * 1.5, []);
-  const hitWindowBottom = useCallback(() => SCREEN_H + TILE_H, []);
+  // ── Game loop ─────────────────────────────────────────────────────────────
 
-  const spawnNextTile = useCallback(() => {
-    if (beatSequence.length === 0) return;
-
-    const idx = spawnIndex.current % beatSequence.length;
-    const loopNum = Math.floor(spawnIndex.current / beatSequence.length);
-    const hit = beatSequence[idx];
-    const beatMs = 60000 / bpm;
-    const totalLoopMs = bars * 4 * beatMs;
-    const targetMs = gameStart.current + loopNum * totalLoopMs + hit.beatTime * beatMs;
-
-    const y = new Animated.Value(-TILE_H);
-    const id = tileId.current++;
-    const now = Date.now();
-    const timeUntilTarget = targetMs - now;
-    const animDuration = timeUntilTarget + (hitZoneY / SCREEN_H) * fallDuration;
-
-    const tile: Tile = {
-      id, lane: hit.lane, label: hit.label, color: hit.color,
-      y, spawnedAt: now, targetMs,
-      hit: false, missed: false, currentY: -TILE_H,
-    };
-
-    // Keep currentY in sync with the animation so hit detection is accurate
-    y.addListener(({ value }) => { tile.currentY = value; });
-
-    setTiles((prev) => [...prev, tile]);
-
-    Animated.timing(y, {
-      toValue: SCREEN_H + TILE_H,
-      duration: Math.max(animDuration, 600),
-      easing: Easing.linear,
-      useNativeDriver: true,
-    }).start(() => {
-      setTiles((prev) => {
-        const t = prev.find((x) => x.id === id);
-        if (t && !t.hit && !t.missed) {
-          t.missed = true;
-          missesRef.current += 1;
-          setMisses(missesRef.current);
-          setCombo(0);
-          comboRef.current = 0;
-          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
-        }
-        return prev.filter((x) => x.id !== id);
-      });
-    });
-
-    spawnIndex.current++;
-
-    const nextIdx = spawnIndex.current % beatSequence.length;
-    const nextLoopNum = Math.floor(spawnIndex.current / beatSequence.length);
-    const nextHit = beatSequence[nextIdx];
-    const nextTargetMs =
-      gameStart.current + nextLoopNum * totalLoopMs + nextHit.beatTime * beatMs;
-    const delay = nextTargetMs - targetMs;
-
-    spawnTimer.current = setTimeout(spawnNextTile, Math.max(delay - fallDuration * 0.65, 50));
-  }, [beatSequence, bpm, bars, fallDuration, hitZoneY]);
-
-  const startGame = useCallback(() => {
-    setScore(0);
-    setCombo(0);
-    setMaxCombo(0);
-    setMisses(0);
-    setTiles([]);
-    scoreRef.current = 0;
-    comboRef.current = 0;
-    maxComboRef.current = 0;
-    missesRef.current = 0;
-    tileId.current = 0;
-    spawnIndex.current = 0;
-    gameStart.current = Date.now() + fallDuration * 0.5;
-    setStep('playing');
-    setTimeout(spawnNextTile, 200);
-  }, [fallDuration, spawnNextTile]);
-
-  const endGame = useCallback(async () => {
-    if (spawnTimer.current) clearTimeout(spawnTimer.current);
+  const finish = useCallback(async () => {
+    if (overRef.current) return;
+    overRef.current = true;
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    rafRef.current = null;
     setStep('over');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
 
@@ -307,144 +251,238 @@ export function PlayScreen({ onBack }: Props) {
       combo: maxComboRef.current,
       date: new Date().toLocaleDateString(),
     };
-    const existing = await loadLeaderboard();
-    const updated = [...existing, entry].sort((a, b) => b.score - a.score).slice(0, 10);
+    const updated = [...(await loadLeaderboard()), entry]
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10);
     await saveLeaderboard(updated);
     setLeaderboard(updated);
   }, [playerName]);
 
-  useEffect(() => {
-    if (missesRef.current >= 3 && step === 'playing') {
-      void endGame();
-    }
-  }, [misses, step, endGame]);
+  /**
+   * One frame: spawn anything due, retire anything that fell past the pad,
+   * then ask React to repaint. Position is derived from the clock rather
+   * than stored, so a dropped frame never desynchronises the tiles from the
+   * music or from the hit test.
+   */
+  const frame = useCallback(() => {
+    if (overRef.current) return;
 
-  useEffect(() => () => { if (spawnTimer.current) clearTimeout(spawnTimer.current); }, []);
+    const now = performance.now();
+    const beatMs = 60000 / bpm;
+    const loopBeats = Math.max(bars, 2) * 4;
+    const loopMs = loopBeats * beatMs;
 
-  // Piano block press — foot/leg tap detection
-  // Strategy: hit the nearest tile in the lane that is anywhere in the lower
-  // half of the screen (past the halfway point). No distance penalty for being
-  // slightly early/late — a foot press is coarse, so we accept any tile that's
-  // in play. Score is based on how close to the piano top edge the tile is.
-  const handlePianoPress = useCallback(
-    (lane: number) => {
-      if (step !== 'playing') return;
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
-
-      const wTop = hitWindowTop();
-      const wBottom = hitWindowBottom();
-
-      setTiles((prev) => {
-        // Pick the tile closest to the piano top edge (pianoTopRef.current)
-        let bestTile: Tile | null = null;
-        let bestDist = Infinity;
-
-        for (const t of prev) {
-          if (t.lane !== lane || t.hit || t.missed) continue;
-          const cy = t.currentY;
-          // Accept any tile that has entered the lower half of the screen
-          if (cy < wTop || cy > wBottom) continue;
-          const dist = Math.abs(cy - pianoTopRef.current);
-          if (dist < bestDist) {
-            bestDist = dist;
-            bestTile = t;
-          }
-        }
-
-        if (bestTile) {
-          bestTile.hit = true;
-          const obj = laneObjects[lane];
-          if (obj) playObject(obj.id);
-
-          // Score: perfect if tile is near the piano top, good if slightly off,
-          // ok if it slipped past (foot was slow)
-          const hitType =
-            bestDist < pianoTopRef.current * 0.15 ? 'perfect'
-            : bestDist < pianoTopRef.current * 0.4 ? 'good'
-            : 'ok';
-          setHitEffect({ lane, type: hitType });
-          setTimeout(() => setHitEffect(null), 350);
-
-          const points = hitType === 'perfect' ? 30 : hitType === 'good' ? 20 : 10;
-          const newScore = scoreRef.current + points * (comboRef.current + 1);
-          scoreRef.current = newScore;
-          setScore(newScore);
-
-          const newCombo = comboRef.current + 1;
-          comboRef.current = newCombo;
-          if (newCombo > maxComboRef.current) {
-            maxComboRef.current = newCombo;
-            setMaxCombo(newCombo);
-          }
-          setCombo(newCombo);
-        }
-
-        return prev;
+    // Spawn every hit whose arrival is now within one travel window.
+    while (beatSequence.length > 0) {
+      const i = nextSpawn.current;
+      const rep = Math.floor(i / beatSequence.length);
+      const hit = beatSequence[i % beatSequence.length];
+      const dueAt = startedAt.current + rep * loopMs + hit.beatTime * beatMs;
+      if (dueAt - now > travelMs) break;
+      tilesRef.current.push({
+        id: nextTileId.current++,
+        lane: hit.lane,
+        label: hit.label,
+        dueAt,
+        hit: false,
+        missed: false,
       });
+      nextSpawn.current++;
+    }
+
+    // Retire tiles that fell past the hit window.
+    let missedThisFrame = 0;
+    tilesRef.current = tilesRef.current.filter((t) => {
+      if (t.hit) return false;
+      const late = now - t.dueAt;
+      if (late > HIT_BELOW + PAD_H) {
+        if (!t.missed) missedThisFrame++;
+        return false;
+      }
+      return true;
+    });
+
+    if (missedThisFrame > 0) {
+      missRef.current += missedThisFrame;
+      comboRef.current = 0;
+      setMisses(missRef.current);
+      setCombo(0);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+      if (missRef.current >= 3) {
+        void finish();
+        return;
+      }
+    }
+
+    forceFrame((n) => n + 1);
+    rafRef.current = requestAnimationFrame(frame);
+  }, [beatSequence, bpm, bars, travelMs, finish]);
+
+  const startGame = useCallback(() => {
+    tilesRef.current = [];
+    nextSpawn.current = 0;
+    nextTileId.current = 0;
+    scoreRef.current = 0;
+    comboRef.current = 0;
+    maxComboRef.current = 0;
+    missRef.current = 0;
+    overRef.current = false;
+    setScore(0);
+    setCombo(0);
+    setMaxCombo(0);
+    setMisses(0);
+    setStep('playing');
+    startedAt.current = performance.now() + travelMs;
+    rafRef.current = requestAnimationFrame(frame);
+  }, [frame, travelMs]);
+
+  useEffect(
+    () => () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     },
-    [step, hitWindowTop, hitWindowBottom, laneObjects, playObject],
+    [],
   );
 
-  // ─── SELECT JAM FLOW ──────────────────────────────────────────────────────
+  /** Screen Y of a tile's top edge, derived from how long until it is due. */
+  const yOf = useCallback(
+    (t: Tile, now: number) => {
+      const remaining = t.dueAt - now;
+      const progress = 1 - remaining / travelMs;
+      return -TILE_H + progress * (padTop + TILE_H);
+    },
+    [travelMs, padTop],
+  );
 
-  const handleSelectJam = useCallback(
+  // ── Hit test ──────────────────────────────────────────────────────────────
+
+  const strike = useCallback(
+    (lane: number) => {
+      if (step !== 'playing' || overRef.current) return;
+
+      const now = performance.now();
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
+
+      // The tile in this lane closest to being due right now.
+      let best: Tile | null = null;
+      let bestOff = Infinity;
+      for (const t of tilesRef.current) {
+        if (t.lane !== lane || t.hit) continue;
+        const off = now - t.dueAt; // negative = early, positive = late
+        const px = (Math.abs(off) / travelMs) * (padTop + TILE_H);
+        if (off < 0 ? px > HIT_ABOVE : px > HIT_BELOW) continue;
+        if (Math.abs(off) < bestOff) {
+          bestOff = Math.abs(off);
+          best = t;
+        }
+      }
+
+      if (!best) return;
+
+      best.hit = true;
+      const obj = laneObjects[lane];
+      if (obj) playObject(obj.id);
+
+      // Timing grades are in milliseconds, not pixels — a foot is slow, so
+      // the windows are wide compared with a thumb-played rhythm game.
+      const kind = bestOff < 140 ? 'PERFECT' : bestOff < 300 ? 'GOOD' : 'OK';
+      const points = kind === 'PERFECT' ? 30 : kind === 'GOOD' ? 20 : 10;
+
+      setPadFlash({ lane, kind });
+      setTimeout(() => setPadFlash(null), 320);
+
+      scoreRef.current += points * (comboRef.current + 1);
+      comboRef.current += 1;
+      if (comboRef.current > maxComboRef.current) {
+        maxComboRef.current = comboRef.current;
+        setMaxCombo(comboRef.current);
+      }
+      setScore(scoreRef.current);
+      setCombo(comboRef.current);
+    },
+    [step, travelMs, padTop, laneObjects, playObject],
+  );
+
+  // ── Setup actions ─────────────────────────────────────────────────────────
+
+  const enableAR = useCallback(async () => {
+    if (!cameraPermission?.granted) {
+      const res = await requestCameraPermission();
+      setArOn(res.granted);
+      return;
+    }
+    setArOn((v) => !v);
+  }, [cameraPermission, requestCameraPermission]);
+
+  /** Ask Gemma for an arrangement right here, rather than sending the user away. */
+  const generateAI = useCallback(async () => {
+    if (objects.length === 0) return;
+    setBusy('Gemma is writing your beat…');
+    await arrange('a punchy danceable beat for a rhythm game, strong downbeats');
+    setBusy(null);
+    setBeatSource('ai');
+    setStep('ready');
+  }, [arrange, objects.length]);
+
+  const pickJam = useCallback(
     async (jam: SessionSummary) => {
-      setLoadingJam(true);
+      setBusy(`Loading ${jam.name}…`);
       await openSession(jam.id);
       setSelectedJam(jam);
-      setBeatSource('jam');
-      setLoadingJam(false);
+      setBeatSource(gridHitCount(useSession.getState().grid) > 0 ? 'grid' : 'ai');
+      setBusy(null);
       setStep('ready');
     },
     [openSession],
   );
 
-  // ─── RENDER ───────────────────────────────────────────────────────────────
+  // ── Render ────────────────────────────────────────────────────────────────
+
+  const now = performance.now();
+  const liveTiles = step === 'playing' ? tilesRef.current : [];
 
   return (
     <View style={styles.root}>
-      {/* AR / background */}
-      {arEnabled && cameraPermission?.granted ? (
+      {/* Camera is the world. When AR is off we fall back to a dark stage. */}
+      {arOn && cameraPermission?.granted ? (
         <View style={StyleSheet.absoluteFill}>
           <CameraView style={StyleSheet.absoluteFill} facing="back" />
           <LinearGradient
-            colors={['rgba(0,0,0,0.6)', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.7)']}
+            colors={['rgba(2,2,6,0.72)', 'rgba(2,2,6,0.25)', 'rgba(2,2,6,0.82)']}
             style={StyleSheet.absoluteFill}
             pointerEvents="none"
           />
         </View>
       ) : (
         <LinearGradient
-          colors={['#060609', '#0C0C18', '#060609']}
+          colors={['#05050A', '#0B0B16', '#05050A']}
           style={StyleSheet.absoluteFill}
           pointerEvents="none"
         />
       )}
 
-      {/* HEADER — always visible */}
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable onPress={onBack} style={styles.back}>
+        <Pressable onPress={onBack} style={styles.back} accessibilityRole="button">
           <Text style={styles.backChevron}>‹</Text>
           <Text style={styles.backText}>Back</Text>
         </Pressable>
-        <Text style={styles.screenTitle}>AR Play Zone</Text>
+        <Text style={styles.screenTitle}>AR Play</Text>
         {step === 'playing' ? (
-          <View style={styles.scoreWrap}>
+          <View style={styles.scorePill}>
             <Text style={styles.scoreNum}>{score}</Text>
           </View>
         ) : (
-          <Pressable onPress={requestAR} style={styles.arBtn}>
-            <View style={[styles.arDot, arEnabled && styles.arDotOn]} />
-            <Text style={[styles.arBtnText, arEnabled && { color: colors.live }]}>AR</Text>
+          <Pressable onPress={enableAR} style={styles.arBtn} accessibilityRole="switch">
+            <View style={[styles.arDot, arOn && styles.arDotOn]} />
+            <Text style={[styles.arBtnText, arOn && { color: colors.live }]}>AR</Text>
           </Pressable>
         )}
       </View>
 
-      {/* ── STEP: NAME ENTRY ──────────────────────────────────────────────── */}
+      {/* ── name ─────────────────────────────────────────────────────────── */}
       {step === 'name' && (
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.centred}
+          style={styles.centre}
         >
           <View style={styles.card}>
             <LinearGradient
@@ -453,12 +491,12 @@ export function PlayScreen({ onBack }: Props) {
               end={{ x: 1, y: 1 }}
               style={styles.cardIcon}
             >
-              <Text style={styles.cardIconText}>🎮</Text>
+              <Text style={styles.cardIconText}>🕹️</Text>
             </LinearGradient>
-            <Text style={styles.cardTitle}>What's your name?</Text>
-            <Text style={styles.cardSub}>Shows on the leaderboard</Text>
+            <Text style={styles.cardTitle}>Who&apos;s playing?</Text>
+            <Text style={styles.cardSub}>Your score goes on the leaderboard</Text>
             <TextInput
-              style={styles.nameInput}
+              style={styles.input}
               value={playerName}
               onChangeText={setPlayerName}
               placeholder="Your name…"
@@ -472,127 +510,141 @@ export function PlayScreen({ onBack }: Props) {
               }}
             />
             <Pressable
-              onPress={() => { Keyboard.dismiss(); setStep('source'); }}
+              onPress={() => {
+                Keyboard.dismiss();
+                setStep('source');
+              }}
               style={styles.primaryBtn}
             >
               <LinearGradient
                 colors={gradients.brand}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
-                style={styles.primaryBtnInner}
+                style={styles.primaryInner}
               >
-                <Text style={styles.primaryBtnText}>Continue →</Text>
+                <Text style={styles.primaryText}>Continue</Text>
               </LinearGradient>
             </Pressable>
             <Pressable
-              onPress={() => { setPlayerName('Anonymous'); setStep('source'); }}
-              style={styles.ghostBtn}
+              onPress={() => {
+                setPlayerName('Anonymous');
+                setStep('source');
+              }}
+              style={styles.ghost}
             >
-              <Text style={styles.ghostBtnText}>Skip</Text>
+              <Text style={styles.ghostText}>Skip</Text>
             </Pressable>
           </View>
         </KeyboardAvoidingView>
       )}
 
-      {/* ── STEP: BEAT SOURCE PICKER ──────────────────────────────────────── */}
+      {/* ── source ───────────────────────────────────────────────────────── */}
       {step === 'source' && (
         <ScrollView
-          contentContainerStyle={[styles.centred, { paddingBottom: insets.bottom + 40 }]}
+          contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 40 }]}
           showsVerticalScrollIndicator={false}
         >
-          <Text style={styles.setupTitle}>Choose your beat</Text>
-          <Text style={styles.setupSub}>Hey {playerName || 'Player'} — pick what tiles fall to</Text>
+          <Text style={styles.setupTitle}>Pick your beat</Text>
+          <Text style={styles.setupSub}>
+            {playerName || 'Player'} — what should the tiles fall to?
+          </Text>
 
-          {/* My Grid */}
           <Pressable
-            onPress={() => { setBeatSource('grid'); setStep('ready'); }}
-            style={[styles.sourceCard, beatSource === 'grid' && styles.sourceCardActive]}
+            onPress={() => {
+              setBeatSource('grid');
+              setStep('ready');
+            }}
+            style={[styles.srcCard, beatSource === 'grid' && styles.srcCardOn]}
           >
             <LinearGradient
-              colors={gridHitCount(grid) > 0 ? gradients.brand : ['#1C1C1E', '#1C1C1E']}
+              colors={gridHitCount(grid) > 0 ? gradients.brand : ['#1C1C22', '#1C1C22']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
-              style={styles.sourceIcon}
+              style={styles.srcIcon}
             >
-              <Text style={styles.sourceIconText}>⊞</Text>
+              <Text style={styles.srcIconText}>⊞</Text>
             </LinearGradient>
-            <View style={styles.sourceInfo}>
-              <Text style={styles.sourceTitle}>My Beat Grid</Text>
-              <Text style={styles.sourceSub}>
+            <View style={styles.srcInfo}>
+              <Text style={styles.srcTitle}>My beat grid</Text>
+              <Text style={styles.srcSub}>
                 {gridHitCount(grid) > 0
                   ? `${gridHitCount(grid)} hits · ${bpm} BPM`
-                  : 'No beat yet — random tiles'}
+                  : 'Nothing programmed — plays a default groove'}
               </Text>
             </View>
-            {beatSource === 'grid' && <View style={styles.selectedDot} />}
           </Pressable>
 
-          {/* AI Plan */}
           <Pressable
-            onPress={() => { setBeatSource('ai'); setStep('ready'); }}
-            style={[styles.sourceCard, beatSource === 'ai' && styles.sourceCardActive]}
+            onPress={plan ? () => { setBeatSource('ai'); setStep('ready'); } : generateAI}
+            disabled={objects.length === 0 || arranging || busy != null}
+            style={[
+              styles.srcCard,
+              beatSource === 'ai' && styles.srcCardOn,
+              objects.length === 0 && styles.srcCardOff,
+            ]}
           >
             <LinearGradient
-              colors={plan ? ['#BF5AF2', '#7C3AED'] : ['#1C1C1E', '#1C1C1E']}
+              colors={objects.length > 0 ? ['#BF5AF2', '#7C3AED'] : ['#1C1C22', '#1C1C22']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
-              style={styles.sourceIcon}
+              style={styles.srcIcon}
             >
-              <Text style={styles.sourceIconText}>✦</Text>
+              <Text style={styles.srcIconText}>✦</Text>
             </LinearGradient>
-            <View style={styles.sourceInfo}>
-              <Text style={styles.sourceTitle}>AI Generated Beat</Text>
-              <Text style={styles.sourceSub}>
-                {plan
-                  ? `Gemma · ${plan.style} · ${bpm} BPM`
-                  : 'Arrange in Studio first'}
+            <View style={styles.srcInfo}>
+              <Text style={styles.srcTitle}>
+                {plan ? 'AI beat' : 'Generate an AI beat'}
+              </Text>
+              <Text style={styles.srcSub}>
+                {objects.length === 0
+                  ? 'Capture a sound first'
+                  : plan
+                    ? `Gemma · ${plan.style} · ${bpm} BPM`
+                    : 'Gemma writes a pattern from your sounds'}
               </Text>
             </View>
-            {beatSource === 'ai' && <View style={[styles.selectedDot, { backgroundColor: colors.ai }]} />}
+            {plan && <Text style={styles.regen} onPress={generateAI}>↻</Text>}
           </Pressable>
 
-          {/* Saved Jams */}
           {savedSessions.length > 0 && (
             <>
-              <Text style={styles.jamSectionLabel}>SAVED JAMS</Text>
+              <Text style={styles.srcSection}>SAVED JAMS</Text>
               {savedSessions.slice(0, 6).map((jam) => (
                 <Pressable
                   key={jam.id}
-                  onPress={() => handleSelectJam(jam)}
-                  style={[
-                    styles.sourceCard,
-                    selectedJam?.id === jam.id && styles.sourceCardActive,
-                  ]}
+                  onPress={() => pickJam(jam)}
+                  style={[styles.srcCard, selectedJam?.id === jam.id && styles.srcCardOn]}
                 >
                   <LinearGradient
                     colors={gradients.brandShort}
                     start={{ x: 0, y: 0 }}
                     end={{ x: 1, y: 1 }}
-                    style={styles.sourceIcon}
+                    style={styles.srcIcon}
                   >
-                    <Text style={styles.sourceIconText}>♪</Text>
+                    <Text style={styles.srcIconText}>♪</Text>
                   </LinearGradient>
-                  <View style={styles.sourceInfo}>
-                    <Text style={styles.sourceTitle} numberOfLines={1}>{jam.name}</Text>
-                    <Text style={styles.sourceSub}>
+                  <View style={styles.srcInfo}>
+                    <Text style={styles.srcTitle} numberOfLines={1}>
+                      {jam.name}
+                    </Text>
+                    <Text style={styles.srcSub}>
                       {jam.objectCount} sounds · {jam.style} · {jam.bpm} BPM
                     </Text>
                   </View>
-                  {selectedJam?.id === jam.id && <View style={styles.selectedDot} />}
                 </Pressable>
               ))}
             </>
           )}
 
-          {loadingJam && (
-            <Text style={styles.loadingText}>Loading jam…</Text>
+          {(busy || arranging) && (
+            <Text style={styles.busy}>{busy ?? 'Working…'}</Text>
           )}
         </ScrollView>
       )}
 
-      {/* ── STEP: READY ───────────────────────────────────────────────────── */}
+      {/* ── ready ────────────────────────────────────────────────────────── */}
       {step === 'ready' && (
-        <View style={styles.centred}>
+        <View style={styles.centre}>
           <LinearGradient
             colors={gradients.brand}
             start={{ x: 0, y: 0 }}
@@ -603,156 +655,239 @@ export function PlayScreen({ onBack }: Props) {
           </LinearGradient>
           <Text style={styles.readyTitle}>Ready, {playerName || 'Player'}?</Text>
           <Text style={styles.readySub}>
-            {beatSource === 'ai' ? 'AI beat' : beatSource === 'jam' ? selectedJam?.name ?? 'Saved jam' : 'Your grid beat'} · {bpm} BPM
-          </Text>
-          <Text style={styles.readyInstructions}>
-            3 piano blocks at the bottom{'\n'}Hit them with your foot when a tile lands{'\n'}3 misses = game over
+            {beatSource === 'ai'
+              ? `AI beat · ${plan?.style ?? ''}`
+              : selectedJam
+                ? selectedJam.name
+                : 'Your grid beat'}{' '}
+            · {bpm} BPM · {beatSequence.length} tiles
           </Text>
 
-          {/* Mini lane preview */}
-          <View style={styles.lanePreview}>
-            {Array.from({ length: LANE_COUNT }).map((_, i) => (
-              <View key={i} style={[styles.lanePreviewBlock, { backgroundColor: LANE_PALETTE[i].dim, borderColor: LANE_PALETTE[i].base }]}>
-                <Text style={[styles.lanePreviewLabel, { color: LANE_PALETTE[i].base }]}>{laneLabels[i]}</Text>
+          <View style={styles.padPreview}>
+            {LANE_PALETTE.map((lp, i) => (
+              <View
+                key={i}
+                style={[
+                  styles.padPreviewBlock,
+                  { backgroundColor: lp.soft, borderColor: lp.base },
+                ]}
+              >
+                <Text style={[styles.padPreviewText, { color: lp.base }]} numberOfLines={1}>
+                  {laneLabels[i]}
+                </Text>
               </View>
             ))}
           </View>
+
+          <Text style={styles.readyHow}>
+            Put the phone on the floor, camera up.{'\n'}
+            Stamp the pad when its tile lands.{'\n'}
+            Three misses and you&apos;re out.
+          </Text>
+
+          {!arOn && (
+            <Pressable onPress={enableAR} style={styles.arPrompt}>
+              <Text style={styles.arPromptText}>📷 Turn on AR camera</Text>
+            </Pressable>
+          )}
 
           <Pressable onPress={startGame} style={styles.primaryBtn}>
             <LinearGradient
               colors={gradients.brand}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
-              style={styles.primaryBtnInner}
+              style={styles.primaryInner}
             >
-              <Text style={styles.primaryBtnText}>Start!</Text>
+              <Text style={styles.primaryText}>Start</Text>
             </LinearGradient>
           </Pressable>
-          <Pressable onPress={() => setStep('source')} style={styles.ghostBtn}>
-            <Text style={styles.ghostBtnText}>← Change beat</Text>
+          <Pressable onPress={() => setStep('source')} style={styles.ghost}>
+            <Text style={styles.ghostText}>Change beat</Text>
           </Pressable>
         </View>
       )}
 
-      {/* ── STEP: PLAYING ─────────────────────────────────────────────────── */}
+      {/* ── playing ──────────────────────────────────────────────────────── */}
       {step === 'playing' && (
         <>
-          {/* HUD */}
           <View style={styles.hud}>
-            <HudItem label="COMBO" value={`${combo}x`} highlight={combo >= 5} />
-            <HudItem label="BPM" value={String(bpm)} />
-            <View style={styles.missHud}>
+            <View style={styles.hudItem}>
+              <Text style={styles.hudLabel}>COMBO</Text>
+              <Text style={[styles.hudValue, combo >= 5 && { color: colors.warn }]}>
+                {combo}x
+              </Text>
+            </View>
+            <View style={styles.hudItem}>
+              <Text style={styles.hudLabel}>BPM</Text>
+              <Text style={styles.hudValue}>{bpm}</Text>
+            </View>
+            <View style={styles.hudItem}>
               <Text style={styles.hudLabel}>MISS</Text>
               <View style={styles.missRow}>
                 {[0, 1, 2].map((i) => (
-                  <View key={i} style={[styles.missDot, i < misses && styles.missDotFilled]} />
+                  <View key={i} style={[styles.missDot, i < misses && styles.missDotOn]} />
                 ))}
               </View>
             </View>
           </View>
 
-          {/* Lane guide lines */}
+          {/*
+            The AR runway: lane walls converge toward a vanishing point so the
+            three pads read as lying on the floor in front of the player rather
+            than as flat buttons stuck to the glass.
+          */}
           <View style={StyleSheet.absoluteFill} pointerEvents="none">
-            {Array.from({ length: LANE_COUNT + 1 }).map((_, i) => (
-              <View key={i} style={[styles.laneLine, { left: i * laneW }]} />
-            ))}
-          </View>
-
-          {/* Hit zone line */}
-          <View
-            style={[styles.hitZoneLine, { top: hitZoneY }]}
-            pointerEvents="none"
-          >
+            {Array.from({ length: LANE_COUNT + 1 }).map((_, i) => {
+              const bottomX = i * laneW;
+              const topX = SCREEN_W / 2 + (bottomX - SCREEN_W / 2) * 0.18;
+              const dx = bottomX - topX;
+              const dy = padTop - SCREEN_H * 0.26;
+              const len = Math.hypot(dx, dy);
+              const angle = Math.atan2(dy, dx) - Math.PI / 2;
+              return (
+                <View
+                  key={i}
+                  style={[
+                    styles.runwayEdge,
+                    {
+                      left: topX,
+                      top: SCREEN_H * 0.26,
+                      height: len,
+                      transform: [
+                        { translateY: len / 2 },
+                        { rotateZ: `${angle}rad` },
+                        { translateY: -len / 2 },
+                      ],
+                    },
+                  ]}
+                />
+              );
+            })}
+            {/* Horizon haze at the vanishing point. */}
             <LinearGradient
-              colors={['transparent', 'rgba(255,255,255,0.08)', 'transparent']}
-              style={StyleSheet.absoluteFill}
+              colors={['rgba(120,140,255,0.16)', 'transparent']}
+              style={[styles.horizon, { top: SCREEN_H * 0.24 }]}
             />
-            <View style={styles.hitZoneBar} />
           </View>
 
-          {/* Falling tiles */}
-          {tiles.filter((t) => !t.hit).map((t) => {
+          {/* Tiles. Position comes from the clock, so they cannot drift. */}
+          {liveTiles.map((t) => {
             const lp = LANE_PALETTE[t.lane];
+            const y = yOf(t, now);
+            if (y < -TILE_H || y > SCREEN_H) return null;
+            // Perspective: a tile far away is narrower and dimmer.
+            const depth = Math.max(0, Math.min(1, (y + TILE_H) / (padTop + TILE_H)));
+            const scale = 0.45 + depth * 0.55;
+            const w = (laneW - 14) * scale;
+            const cx = t.lane * laneW + laneW / 2;
+            const shift = (cx - SCREEN_W / 2) * (1 - scale) * 0.55;
             return (
-              <Animated.View
+              <View
                 key={t.id}
                 pointerEvents="none"
                 style={[
                   styles.tile,
                   {
-                    left: t.lane * laneW + 6,
-                    width: laneW - 12,
-                    transform: [{ translateY: t.y }],
-                    backgroundColor: t.missed ? 'rgba(255,69,58,0.2)' : `${lp.base}22`,
-                    borderColor: t.missed ? colors.accent : lp.base,
+                    left: cx - w / 2 - shift,
+                    width: w,
+                    top: y,
+                    height: TILE_H * (0.55 + depth * 0.45),
+                    opacity: 0.35 + depth * 0.65,
+                    borderColor: lp.base,
+                    backgroundColor: lp.soft,
                   },
                 ]}
               >
-                <View style={[styles.tileTopGlow, { backgroundColor: lp.base }]} />
-                <Text
-                  style={[styles.tileLabel, { color: t.missed ? colors.accent : '#FFFFFF' }]}
-                  numberOfLines={1}
-                >
-                  {t.missed ? '✕' : t.label}
+                <View style={[styles.tileEdge, { backgroundColor: lp.base }]} />
+                <Text style={styles.tileLabel} numberOfLines={1}>
+                  {t.label}
                 </Text>
-              </Animated.View>
+              </View>
             );
           })}
 
-          {/* Hit effect overlay per lane */}
-          {hitEffect && (
+          {padFlash && (
             <View
               pointerEvents="none"
               style={[
-                styles.hitEffect,
+                styles.flash,
                 {
-                  left: hitEffect.lane * laneW,
+                  left: padFlash.lane * laneW,
                   width: laneW,
-                  top: hitZoneY - 60,
-                  backgroundColor: LANE_PALETTE[hitEffect.lane].glow,
+                  top: padTop - 52,
                 },
               ]}
             >
-              <Text style={styles.hitLabel}>
-                {hitEffect.type === 'perfect' ? 'PERFECT!' : hitEffect.type === 'good' ? 'GOOD' : 'OK'}
+              <Text
+                style={[
+                  styles.flashText,
+                  {
+                    color:
+                      padFlash.kind === 'PERFECT'
+                        ? colors.warn
+                        : padFlash.kind === 'GOOD'
+                          ? colors.live
+                          : colors.textDim,
+                  },
+                ]}
+              >
+                {padFlash.kind}
               </Text>
             </View>
           )}
 
-          {/* ── 3 PIANO BLOCKS ──────────────────────────────────────────── */}
-          <View style={[styles.pianoRow, { top: pianoTop, height: PIANO_H + insets.bottom }]}>
-            {Array.from({ length: LANE_COUNT }).map((_, i) => {
-              const lp = LANE_PALETTE[i];
-              const isPressed = pressedLane === i;
+          {/* The three floor pads. */}
+          <View style={[styles.padRow, { top: padTop, height: PAD_H + insets.bottom }]}>
+            {LANE_PALETTE.map((lp, i) => {
+              const down = pressedLane === i;
               return (
                 <Pressable
                   key={i}
                   onPressIn={() => {
                     setPressedLane(i);
-                    handlePianoPress(i);
+                    strike(i);
                   }}
                   onPressOut={() => setPressedLane(null)}
-                  // Extend touch target 200px upward so tiles entering the
-                  // piano zone register even before the foot fully lands
-                  hitSlop={{ top: 220, left: 0, right: 0, bottom: 0 }}
+                  // A foot lands wide and early; reach up the runway for it.
+                  hitSlop={{ top: HIT_ABOVE, bottom: 0, left: 0, right: 0 }}
+                  android_disableSound
+                  accessibilityRole="button"
+                  accessibilityLabel={`Pad ${i + 1}, ${laneLabels[i]}`}
                   style={[
-                    styles.pianoBlock,
+                    styles.pad,
                     {
-                      borderColor: isPressed ? lp.base : `${lp.base}55`,
-                      backgroundColor: isPressed ? `${lp.base}30` : `${lp.base}0D`,
+                      borderColor: down ? lp.base : `${lp.base}44`,
+                      backgroundColor: down ? lp.glow : `${lp.base}0F`,
                     },
                   ]}
                 >
-                  {/* Top edge glow */}
-                  <View style={[styles.pianoTopEdge, { backgroundColor: lp.base, opacity: isPressed ? 1 : 0.4 }]} />
-                  <View style={styles.pianoContent}>
-                    <View style={[styles.pianoCircle, { borderColor: lp.base, backgroundColor: isPressed ? `${lp.base}40` : 'transparent' }]}>
-                      <Text style={[styles.pianoNum, { color: lp.base }]}>{i + 1}</Text>
+                  <View
+                    style={[
+                      styles.padLip,
+                      { backgroundColor: lp.base, opacity: down ? 1 : 0.45 },
+                    ]}
+                  />
+                  <View style={styles.padBody}>
+                    <View
+                      style={[
+                        styles.padRing,
+                        {
+                          borderColor: lp.base,
+                          backgroundColor: down ? `${lp.base}55` : 'transparent',
+                          transform: [{ scale: down ? 1.12 : 1 }],
+                        },
+                      ]}
+                    >
+                      <Text style={[styles.padNum, { color: down ? '#FFF' : lp.base }]}>
+                        {i + 1}
+                      </Text>
                     </View>
-                    <Text style={[styles.pianoLabel, { color: isPressed ? '#FFFFFF' : lp.base }]} numberOfLines={2}>
+                    <Text
+                      style={[styles.padLabel, { color: down ? '#FFF' : lp.base }]}
+                      numberOfLines={1}
+                    >
                       {laneLabels[i]}
                     </Text>
-                    <Text style={[styles.pianoHint, { color: `${lp.base}80` }]}>TAP / FOOT</Text>
                   </View>
                 </Pressable>
               );
@@ -761,55 +896,63 @@ export function PlayScreen({ onBack }: Props) {
         </>
       )}
 
-      {/* ── STEP: GAME OVER ───────────────────────────────────────────────── */}
+      {/* ── over ─────────────────────────────────────────────────────────── */}
       {step === 'over' && (
         <ScrollView
-          contentContainerStyle={[styles.centred, { paddingBottom: insets.bottom + 40 }]}
+          contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 40 }]}
           showsVerticalScrollIndicator={false}
         >
           <Text style={styles.overTitle}>
-            {score > 500 ? '🔥 Insane!' : score > 200 ? '🎵 Nice!' : '💀 Game Over'}
+            {score > 500 ? '🔥 Insane' : score > 200 ? '🎵 Nice' : '💀 Game over'}
           </Text>
           <Text style={styles.overSub}>{playerName || 'Player'}</Text>
 
           <View style={styles.overStats}>
-            <StatBadge label="Score" value={String(score)} color={colors.vibe} />
-            <StatBadge label="Best Combo" value={`${maxCombo}x`} color={colors.warn} />
-            <StatBadge label="Misses" value={String(misses)} color={colors.accent} />
+            <Stat label="Score" value={String(score)} color={colors.vibe} />
+            <Stat label="Best combo" value={`${maxCombo}x`} color={colors.warn} />
+            <Stat label="Misses" value={String(misses)} color={colors.accent} />
           </View>
 
           {leaderboard.length > 0 && (
-            <View style={styles.leaderboard}>
-              <Text style={styles.lbTitle}>🏆 LEADERBOARD</Text>
+            <View style={styles.board}>
+              <Text style={styles.boardTitle}>🏆 LEADERBOARD</Text>
               {leaderboard.map((e, i) => {
-                const isMe = e.name === (playerName || 'Anonymous') && e.score === score;
+                const mine = e.name === (playerName || 'Anonymous') && e.score === score;
                 return (
-                  <View key={i} style={[styles.lbRow, isMe && styles.lbRowMe]}>
-                    <Text style={[styles.lbRank, i === 0 && { color: colors.warn }]}>
+                  <View key={i} style={[styles.boardRow, mine && styles.boardRowMine]}>
+                    <Text style={[styles.boardRank, i === 0 && { color: colors.warn }]}>
                       {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`}
                     </Text>
-                    <Text style={[styles.lbName, isMe && { color: colors.vibe }]} numberOfLines={1}>
+                    <Text
+                      style={[styles.boardName, mine && { color: colors.vibe }]}
+                      numberOfLines={1}
+                    >
                       {e.name}
                     </Text>
-                    <Text style={styles.lbScore}>{e.score}</Text>
-                    <Text style={styles.lbCombo}>{e.combo}x</Text>
+                    <Text style={styles.boardScore}>{e.score}</Text>
+                    <Text style={styles.boardCombo}>{e.combo}x</Text>
                   </View>
                 );
               })}
             </View>
           )}
 
-          <View style={styles.overButtons}>
+          <View style={styles.overBtns}>
             <Pressable onPress={startGame} style={styles.primaryBtn}>
-              <LinearGradient colors={gradients.brand} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryBtnInner}>
-                <Text style={styles.primaryBtnText}>Play Again</Text>
+              <LinearGradient
+                colors={gradients.brand}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.primaryInner}
+              >
+                <Text style={styles.primaryText}>Play again</Text>
               </LinearGradient>
             </Pressable>
-            <Pressable onPress={() => setStep('source')} style={styles.ghostBtn}>
-              <Text style={styles.ghostBtnText}>Change Beat</Text>
+            <Pressable onPress={() => setStep('source')} style={styles.ghost}>
+              <Text style={styles.ghostText}>Change beat</Text>
             </Pressable>
-            <Pressable onPress={onBack} style={styles.ghostBtn}>
-              <Text style={styles.ghostBtnText}>Back to Studio</Text>
+            <Pressable onPress={onBack} style={styles.ghost}>
+              <Text style={styles.ghostText}>Back to studio</Text>
             </Pressable>
           </View>
         </ScrollView>
@@ -818,18 +961,9 @@ export function PlayScreen({ onBack }: Props) {
   );
 }
 
-function HudItem({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+function Stat({ label, value, color }: { label: string; value: string; color: string }) {
   return (
-    <View style={styles.hudItem}>
-      <Text style={styles.hudLabel}>{label}</Text>
-      <Text style={[styles.hudValue, highlight && { color: colors.warn }]}>{value}</Text>
-    </View>
-  );
-}
-
-function StatBadge({ label, value, color }: { label: string; value: string; color: string }) {
-  return (
-    <View style={styles.statBadge}>
+    <View style={styles.stat}>
       <Text style={[styles.statValue, { color }]}>{value}</Text>
       <Text style={styles.statLabel}>{label}</Text>
     </View>
@@ -837,20 +971,27 @@ function StatBadge({ label, value, color }: { label: string; value: string; colo
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#060609' },
+  root: { flex: 1, backgroundColor: '#05050A' },
 
-  // ── Header ────────────────────────────────────────────────────────────────
   header: {
-    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg, paddingBottom: spacing.sm, zIndex: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+    zIndex: 30,
   },
   back: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingRight: spacing.md },
   backChevron: { fontSize: 22, fontWeight: '300', color: colors.vibe, marginTop: -1 },
   backText: { ...type.body, color: colors.vibe },
   screenTitle: { ...type.title, color: colors.text },
-  scoreWrap: {
-    paddingHorizontal: 14, paddingVertical: 6, borderRadius: radius.pill,
-    backgroundColor: 'rgba(255,214,10,0.12)', borderWidth: 1, borderColor: 'rgba(255,214,10,0.2)',
+  scorePill: {
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    borderRadius: radius.pill,
+    backgroundColor: 'rgba(255,214,10,0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255,214,10,0.2)',
   },
   scoreNum: { ...type.label, fontSize: 16, color: colors.warn, fontVariant: ['tabular-nums'] },
   arBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: spacing.sm },
@@ -858,208 +999,245 @@ const styles = StyleSheet.create({
   arDotOn: { backgroundColor: colors.live },
   arBtnText: { ...type.caption, color: colors.textDim, letterSpacing: 1 },
 
-  // ── Shared layout ─────────────────────────────────────────────────────────
-  centred: {
-    flex: 1, alignItems: 'center', justifyContent: 'center',
-    gap: spacing.md, paddingHorizontal: spacing.xl,
+  centre: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.xl,
   },
+  scroll: {
+    flexGrow: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.md,
+    paddingHorizontal: spacing.xl,
+  },
+
   card: {
-    width: '100%', alignItems: 'center', gap: spacing.md,
-    padding: spacing.xl, borderRadius: radius.xl,
-    borderWidth: 1, borderColor: colors.border,
-    backgroundColor: 'rgba(10,10,16,0.92)',
+    width: '100%',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.xl,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(8,8,14,0.94)',
   },
   cardIcon: {
-    width: 72, height: 72, borderRadius: 36,
-    alignItems: 'center', justifyContent: 'center',
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   cardIconText: { fontSize: 30 },
   cardTitle: { ...type.title, fontSize: 22, color: colors.text },
   cardSub: { ...type.body, color: colors.textDim, textAlign: 'center' },
-
-  // ── Name input ────────────────────────────────────────────────────────────
-  nameInput: {
-    width: '100%', height: 54, borderRadius: radius.lg,
-    borderWidth: 1.5, borderColor: colors.vibe,
+  input: {
+    width: '100%',
+    height: 54,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+    borderColor: colors.vibe,
     backgroundColor: 'rgba(255,255,255,0.04)',
-    paddingHorizontal: spacing.lg, ...type.body, color: colors.text,
-    fontSize: 19, textAlign: 'center', marginTop: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    ...type.body,
+    color: colors.text,
+    fontSize: 19,
+    textAlign: 'center',
+    marginTop: spacing.sm,
   },
 
-  // ── Buttons ───────────────────────────────────────────────────────────────
   primaryBtn: { width: '100%', marginTop: spacing.sm },
-  primaryBtnInner: {
-    paddingVertical: spacing.lg, borderRadius: radius.pill, alignItems: 'center',
-  },
-  primaryBtnText: { ...type.label, fontSize: 17, color: '#FFFFFF', letterSpacing: 0.5 },
-  ghostBtn: { paddingVertical: spacing.sm },
-  ghostBtnText: { ...type.body, color: colors.textDim },
+  primaryInner: { paddingVertical: spacing.lg, borderRadius: radius.pill, alignItems: 'center' },
+  primaryText: { ...type.label, fontSize: 17, color: '#FFFFFF', letterSpacing: 0.5 },
+  ghost: { paddingVertical: spacing.sm },
+  ghostText: { ...type.body, color: colors.textDim },
 
-  // ── Source picker ─────────────────────────────────────────────────────────
   setupTitle: { ...type.display, fontSize: 26, color: colors.text, textAlign: 'center' },
-  setupSub: { ...type.body, color: colors.textDim, textAlign: 'center', marginBottom: spacing.sm },
-  sourceCard: {
-    width: '100%', flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    padding: spacing.lg, borderRadius: radius.xl, borderWidth: 1,
-    borderColor: colors.border, backgroundColor: 'rgba(255,255,255,0.03)',
+  setupSub: {
+    ...type.body,
+    color: colors.textDim,
+    textAlign: 'center',
+    marginBottom: spacing.sm,
   },
-  sourceCardActive: {
-    borderColor: colors.vibe, backgroundColor: 'rgba(10,132,255,0.08)',
+  srcCard: {
+    width: '100%',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.lg,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(255,255,255,0.03)',
   },
-  sourceIcon: {
-    width: 52, height: 52, borderRadius: radius.lg,
-    alignItems: 'center', justifyContent: 'center',
+  srcCardOn: { borderColor: colors.vibe, backgroundColor: 'rgba(10,132,255,0.08)' },
+  srcCardOff: { opacity: 0.45 },
+  srcIcon: {
+    width: 52,
+    height: 52,
+    borderRadius: radius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  sourceIconText: { fontSize: 22, color: '#FFFFFF' },
-  sourceInfo: { flex: 1, gap: 3 },
-  sourceTitle: { ...type.label, color: colors.text, fontSize: 15 },
-  sourceSub: { ...type.caption, color: colors.textDim },
-  selectedDot: {
-    width: 10, height: 10, borderRadius: 5, backgroundColor: colors.vibe,
+  srcIconText: { fontSize: 22, color: '#FFFFFF' },
+  srcInfo: { flex: 1, gap: 3 },
+  srcTitle: { ...type.label, color: colors.text, fontSize: 15 },
+  srcSub: { ...type.caption, color: colors.textDim },
+  srcSection: {
+    ...type.caption,
+    letterSpacing: 2,
+    color: colors.textFaint,
+    alignSelf: 'flex-start',
+    marginTop: spacing.md,
   },
-  jamSectionLabel: {
-    ...type.caption, letterSpacing: 2, color: colors.textFaint,
-    alignSelf: 'flex-start', marginTop: spacing.md,
-  },
-  loadingText: { ...type.caption, color: colors.textDim },
+  regen: { fontSize: 20, color: colors.ai, paddingHorizontal: spacing.sm },
+  busy: { ...type.caption, color: colors.ai },
 
-  // ── Ready screen ──────────────────────────────────────────────────────────
   readyIcon: {
-    width: 88, height: 88, borderRadius: 44,
-    alignItems: 'center', justifyContent: 'center',
+    width: 84,
+    height: 84,
+    borderRadius: 42,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  readyGlyph: { fontSize: 40, color: '#FFFFFF' },
-  readyTitle: { ...type.display, fontSize: 28, color: colors.text, textAlign: 'center' },
-  readySub: { ...type.body, color: colors.textDim },
-  readyInstructions: {
-    ...type.body, color: colors.textDim, textAlign: 'center', lineHeight: 24,
-    paddingHorizontal: spacing.md,
+  readyGlyph: { fontSize: 38, color: '#FFFFFF' },
+  readyTitle: { ...type.display, fontSize: 27, color: colors.text, textAlign: 'center' },
+  readySub: { ...type.body, color: colors.textDim, textAlign: 'center' },
+  readyHow: {
+    ...type.body,
+    color: colors.textDim,
+    textAlign: 'center',
+    lineHeight: 23,
   },
-  lanePreview: {
-    flexDirection: 'row', width: '100%', gap: spacing.sm, marginVertical: spacing.sm,
+  padPreview: { flexDirection: 'row', width: '100%', gap: spacing.sm, marginVertical: spacing.sm },
+  padPreviewBlock: {
+    flex: 1,
+    height: 58,
+    borderRadius: radius.md,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
   },
-  lanePreviewBlock: {
-    flex: 1, height: 56, borderRadius: radius.md, borderWidth: 1.5,
-    alignItems: 'center', justifyContent: 'center',
+  padPreviewText: { ...type.caption, fontWeight: '700', fontSize: 11 },
+  arPrompt: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
-  lanePreviewLabel: { ...type.caption, fontWeight: '700', fontSize: 11 },
+  arPromptText: { ...type.caption, color: colors.textDim },
 
-  // ── HUD ───────────────────────────────────────────────────────────────────
   hud: {
-    flexDirection: 'row', justifyContent: 'center', gap: spacing.xxl,
-    paddingVertical: spacing.md, zIndex: 10,
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: spacing.xxl,
+    paddingVertical: spacing.sm,
+    zIndex: 20,
   },
   hudItem: { alignItems: 'center', gap: 4 },
   hudLabel: { ...type.caption, fontSize: 9, letterSpacing: 2, color: colors.textFaint },
   hudValue: { ...type.title, fontSize: 20, color: colors.text, fontVariant: ['tabular-nums'] },
-  missHud: { alignItems: 'center', gap: 4 },
   missRow: { flexDirection: 'row', gap: 6 },
   missDot: {
-    width: 12, height: 12, borderRadius: 6,
-    borderWidth: 2, borderColor: 'rgba(255,69,58,0.3)',
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    borderWidth: 2,
+    borderColor: 'rgba(255,69,58,0.3)',
   },
-  missDotFilled: { backgroundColor: colors.accent, borderColor: colors.accent },
+  missDotOn: { backgroundColor: colors.accent, borderColor: colors.accent },
 
-  // ── Lane guide ────────────────────────────────────────────────────────────
-  laneLine: {
-    position: 'absolute', top: 0, bottom: 0, width: 1,
-    backgroundColor: 'rgba(255,255,255,0.04)',
+  runwayEdge: {
+    position: 'absolute',
+    width: 1.5,
+    backgroundColor: 'rgba(150,170,255,0.18)',
   },
-  hitZoneLine: {
-    position: 'absolute', left: 0, right: 0, height: 40, zIndex: 1,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  hitZoneBar: {
-    height: 2, alignSelf: 'stretch',
-    marginHorizontal: spacing.sm,
-    borderRadius: 1,
-    backgroundColor: 'rgba(255,255,255,0.25)',
-  },
+  horizon: { position: 'absolute', left: 0, right: 0, height: 140 },
 
-  // ── Tiles ─────────────────────────────────────────────────────────────────
   tile: {
-    position: 'absolute', height: TILE_H,
-    borderRadius: radius.lg, borderWidth: 1.5,
-    alignItems: 'center', justifyContent: 'center',
-    zIndex: 5, overflow: 'hidden',
+    position: 'absolute',
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 10,
+    overflow: 'hidden',
   },
-  tileTopGlow: {
-    position: 'absolute', top: 0, left: 0, right: 0, height: 3, opacity: 0.9,
-  },
+  tileEdge: { position: 'absolute', top: 0, left: 0, right: 0, height: 3 },
   tileLabel: {
-    ...type.label, fontSize: 14, color: '#FFFFFF',
-    textTransform: 'uppercase', letterSpacing: 1,
-  },
-  hitEffect: {
-    position: 'absolute', height: 90, zIndex: 8,
-    borderRadius: radius.md, alignItems: 'center', justifyContent: 'center',
-  },
-  hitLabel: {
-    ...type.label, fontSize: 16, color: '#FFFFFF',
-    letterSpacing: 2, fontWeight: '900',
+    ...type.label,
+    fontSize: 13,
+    color: '#FFFFFF',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
   },
 
-  // ── 3 PIANO BLOCKS ────────────────────────────────────────────────────────
-  pianoRow: {
-    position: 'absolute', left: 0, right: 0,
-    flexDirection: 'row', zIndex: 15,
-  },
-  pianoBlock: {
+  flash: { position: 'absolute', alignItems: 'center', zIndex: 18 },
+  flashText: { ...type.label, fontSize: 18, fontWeight: '900', letterSpacing: 2 },
+
+  padRow: { position: 'absolute', left: 0, right: 0, flexDirection: 'row', zIndex: 25 },
+  pad: {
     flex: 1,
     borderTopWidth: 2,
     borderLeftWidth: 0.5,
     borderRightWidth: 0.5,
-    borderBottomWidth: 0,
     alignItems: 'center',
     paddingTop: spacing.md,
-    paddingBottom: spacing.lg,
   },
-  pianoTopEdge: {
-    position: 'absolute', top: 0, left: 0, right: 0, height: 3, borderRadius: 1.5,
+  padLip: { position: 'absolute', top: 0, left: 0, right: 0, height: 3 },
+  padBody: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
+  padRing: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    borderWidth: 2.5,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  pianoContent: {
-    alignItems: 'center', gap: spacing.sm, flex: 1, justifyContent: 'center',
-  },
-  pianoCircle: {
-    width: 56, height: 56, borderRadius: 28,
-    borderWidth: 2, alignItems: 'center', justifyContent: 'center',
-  },
-  pianoNum: { ...type.title, fontSize: 20, fontWeight: '900' },
-  pianoLabel: {
-    ...type.label, fontSize: 13, textAlign: 'center',
-    maxWidth: 90, fontWeight: '700',
-  },
-  pianoHint: {
-    ...type.caption, fontSize: 9, letterSpacing: 2, marginTop: 2,
-  },
+  padNum: { ...type.title, fontSize: 22, fontWeight: '900' },
+  padLabel: { ...type.label, fontSize: 12, fontWeight: '700', maxWidth: 96, textAlign: 'center' },
 
-  // ── Game over ─────────────────────────────────────────────────────────────
-  overTitle: { ...type.display, fontSize: 32, color: colors.text, textAlign: 'center' },
+  overTitle: { ...type.display, fontSize: 31, color: colors.text, textAlign: 'center' },
   overSub: { ...type.body, color: colors.textDim },
   overStats: { flexDirection: 'row', gap: spacing.sm },
-  overButtons: { gap: spacing.md, alignItems: 'center', width: '100%' },
+  overBtns: { gap: spacing.sm, alignItems: 'center', width: '100%' },
 
-  leaderboard: {
-    width: '100%', borderRadius: radius.lg, borderWidth: 1,
-    borderColor: colors.border, backgroundColor: 'rgba(10,10,16,0.9)',
-    padding: spacing.lg, gap: spacing.sm,
+  board: {
+    width: '100%',
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(8,8,14,0.92)',
+    padding: spacing.lg,
+    gap: spacing.sm,
   },
-  lbTitle: { ...type.caption, letterSpacing: 2, color: colors.warn, marginBottom: spacing.xs },
-  lbRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 4 },
-  lbRowMe: {
+  boardTitle: { ...type.caption, letterSpacing: 2, color: colors.warn, marginBottom: spacing.xs },
+  boardRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 4 },
+  boardRowMine: {
     backgroundColor: 'rgba(10,132,255,0.1)',
-    borderRadius: radius.sm, paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
+    paddingHorizontal: spacing.sm,
   },
-  lbRank: { ...type.caption, color: colors.textFaint, width: 28, textAlign: 'center' },
-  lbName: { ...type.label, color: colors.text, flex: 1, fontSize: 13 },
-  lbScore: { ...type.label, color: colors.warn, fontSize: 14, fontVariant: ['tabular-nums'] },
-  lbCombo: { ...type.caption, color: colors.textDim, width: 32, textAlign: 'right' },
+  boardRank: { ...type.caption, color: colors.textFaint, width: 28, textAlign: 'center' },
+  boardName: { ...type.label, color: colors.text, flex: 1, fontSize: 13 },
+  boardScore: { ...type.label, color: colors.warn, fontSize: 14, fontVariant: ['tabular-nums'] },
+  boardCombo: { ...type.caption, color: colors.textDim, width: 32, textAlign: 'right' },
 
-  statBadge: {
-    alignItems: 'center', gap: 4, paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.lg, borderRadius: radius.lg,
-    backgroundColor: colors.surfaceSolid, borderWidth: 1,
-    borderColor: colors.border, minWidth: 90,
+  stat: {
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSolid,
+    borderWidth: 1,
+    borderColor: colors.border,
+    minWidth: 90,
   },
   statValue: { ...type.title, fontSize: 24, fontVariant: ['tabular-nums'] },
   statLabel: { ...type.caption, color: colors.textDim },
