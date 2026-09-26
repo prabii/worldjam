@@ -16,17 +16,22 @@ import { LayerList } from '@/components/LayerList';
 import { LyricDisplay } from '@/components/LyricDisplay';
 import { QuantizePanel } from '@/components/QuantizePanel';
 import { RhythmGuide } from '@/components/RhythmGuide';
-import { SoundObjectCard } from '@/components/SoundObjectCard';
+import { BeatGridPanel } from '@/components/BeatGridPanel';
+import { gridHitCount } from '@/audio/beatGrid';
 import { TrackPlayer } from '@/components/TrackPlayer';
 import { TransportBar } from '@/components/TransportBar';
 import { VibeGrid } from '@/components/VibeGrid';
 import { Waveform } from '@/components/Waveform';
 import {
-  describeStatus,
   getModelStatus,
+  initModel,
   subscribeModelStatus,
   type ModelStatus,
 } from '@/ai/modelLoader';
+import { GemmaCard } from '@/components/GemmaCard';
+import { GradientButton } from '@/components/ui/GradientButton';
+import { gradients } from '@/theme/gradients';
+import { toast } from '@/state/toastStore';
 import { speakNow } from '@/audio/speech';
 import { useSession } from '@/state/sessionStore';
 import { colors, radius, spacing, type } from '@/theme';
@@ -35,7 +40,7 @@ import { colors, radius, spacing, type } from '@/theme';
  * The jam surface — panels 4 through 8 of the product mockups, in the order
  * the demo walks them: voice, guide, arrange, layers, vibes, player.
  */
-export function JamScreen({ onBack }: { onBack: () => void }) {
+export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture: () => void }) {
   const insets = useSafeAreaInsets();
   const [showQuantize, setShowQuantize] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -52,13 +57,6 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
     s.beginCapture({ kind: 'vocal' });
   }, [s]);
 
-  const modelTone =
-    modelStatus.state === 'ready'
-      ? colors.live
-      : modelStatus.state === 'error'
-        ? colors.warn
-        : colors.textFaint;
-
   return (
     <View style={styles.root}>
       <View style={[styles.top, { paddingTop: insets.top + spacing.sm }]}>
@@ -72,22 +70,57 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
         contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 150 }]}
         showsVerticalScrollIndicator={false}
       >
-        {/* --- pads (panel 3) --- */}
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.cards}
-        >
-          {s.objects.map((o) => (
-            <SoundObjectCard
-              key={o.id}
-              object={o}
-              pcm={s.pcmBySlot.get(o.slot) ?? null}
-              onTrigger={s.playObject}
-              onLongPress={s.removeObject}
-            />
-          ))}
-        </ScrollView>
+        {/* --- the step grid: one row per captured sound, the user's own beat --- */}
+        <View style={styles.sectionPad}>
+          <BeatGridPanel
+            grid={s.grid}
+            objects={s.objects}
+            playing={s.playing}
+            recording={s.gridRecording}
+            aiMode={s.aiMode}
+            arranging={s.arranging}
+            plan={s.plan}
+            bpm={s.bpm}
+            modelReady={modelStatus.state === 'ready'}
+            onToggleStep={s.toggleGridStep}
+            onPlaySound={s.playObject}
+            onSetSteps={s.setGridSteps}
+            onToggleRecord={s.toggleGridRecord}
+            onClear={s.clearGrid}
+            onSetAiMode={(on) => void s.setAiMode(on)}
+            onReproduce={() => void s.arrange()}
+            onAddSound={onCapture}
+          />
+        </View>
+
+        {/* --- the director's desk: Gemma + arrange (panel 6 trigger) --- */}
+        <View style={styles.sectionPad}>
+          <GemmaCard
+            status={modelStatus}
+            plan={s.plan}
+            bpm={s.bpm}
+            lastPlanInfo={s.lastPlanInfo}
+            arranging={s.arranging}
+            canArrange={s.objects.length > 0}
+            onArrange={() => void s.arrange()}
+            texture={{
+              on: s.textureOn,
+              status: s.textureStatus,
+              info: s.textureInfo,
+              onToggle: s.setTextureOn,
+              onRegenerate: s.regenerateTexture,
+            }}
+            onLoadModel={() => {
+              toast('Looking for Gemma…', 'progress');
+              void initModel().then(() => {
+                const st = getModelStatus();
+                if (st.state === 'ready') toast('Gemma is ready to arrange', 'ai');
+                else if (st.state === 'absent') toast('Model file not found on this phone', 'error');
+                else if (st.state === 'error') toast(`Gemma failed: ${st.message}`, 'error');
+              });
+            }}
+          />
+        </View>
 
         {/* --- voice (panel 4) --- */}
         <View style={styles.sectionPad}>
@@ -127,10 +160,12 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
           </View>
         </View>
 
-        {/* --- rhythm guide (panel 5) --- */}
-        <View style={styles.sectionPad}>
-          <RhythmGuide plan={s.plan} objects={s.objects} playing={s.playing} />
-        </View>
+        {/* --- rhythm guide (panel 5): for plans made without a grid beat --- */}
+        {gridHitCount(s.grid) === 0 && s.plan && (
+          <View style={styles.sectionPad}>
+            <RhythmGuide plan={s.plan} objects={s.objects} playing={s.playing} />
+          </View>
+        )}
 
         {/* --- lyrics --- */}
         <View style={styles.sectionPad}>
@@ -162,34 +197,6 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
               </Text>
             )}
           </Pressable>
-        </View>
-
-        {/* --- arrange (panel 6 trigger) --- */}
-        <View style={styles.sectionPad}>
-          <Pressable
-            onPress={() => s.arrange()}
-            disabled={s.arranging || s.objects.length === 0}
-            accessibilityRole="button"
-            style={[
-              styles.arrange,
-              (s.arranging || s.objects.length === 0) && styles.arrangeDisabled,
-            ]}
-          >
-            {s.arranging ? (
-              <ActivityIndicator color={colors.bg} />
-            ) : (
-              <Text style={styles.arrangeText}>Turn it into music</Text>
-            )}
-          </Pressable>
-
-          <View style={styles.modelRow}>
-            <View style={[styles.modelDot, { backgroundColor: modelTone }]} />
-            <Text style={styles.modelText} numberOfLines={2}>
-              {describeStatus(modelStatus)}
-            </Text>
-          </View>
-
-          {s.lastPlanInfo && <Text style={styles.planInfo}>{s.lastPlanInfo}</Text>}
         </View>
 
         {/* --- layers (panel 6) --- */}
@@ -250,20 +257,19 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
         {/* --- save this jam --- */}
         {s.objects.length > 0 && (
           <View style={styles.sectionPad}>
-            <Pressable
+            <GradientButton
+              label="Save this jam"
+              trailing="♥"
+              busy={s.savingSession}
+              busyLabel="Saving…"
+              gradient={gradients.capture}
+              shape="rounded"
               onPress={() => {
                 setSaveName(`Jam ${new Date().toLocaleDateString()}`);
                 setSaving(true);
               }}
-              disabled={s.savingSession}
-              accessibilityRole="button"
               accessibilityLabel="Save this jam"
-              style={styles.saveButton}
-            >
-              <Text style={styles.saveButtonText}>
-                {s.savingSession ? 'Saving…' : '♥ Save this jam'}
-              </Text>
-            </Pressable>
+            />
           </View>
         )}
 
@@ -323,7 +329,6 @@ export function JamScreen({ onBack }: { onBack: () => void }) {
       </Modal>
 
       <View style={[styles.transportWrap, { paddingBottom: insets.bottom + spacing.md }]}>
-        {s.statusMessage && <Text style={styles.status}>{s.statusMessage}</Text>}
         <TransportBar
           playing={s.playing}
           armed={s.armed}
@@ -349,18 +354,8 @@ const styles = StyleSheet.create({
   back: { paddingVertical: spacing.sm, paddingRight: spacing.md },
   backText: { ...type.label, color: colors.textDim },
   scroll: { gap: spacing.lg },
-  cards: { gap: spacing.md, paddingHorizontal: spacing.lg },
   sectionPad: { paddingHorizontal: spacing.lg },
 
-  arrange: {
-    paddingVertical: spacing.lg,
-    borderRadius: radius.md,
-    backgroundColor: colors.vibe,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minHeight: 52,
-  },
-  arrangeDisabled: { backgroundColor: colors.surfaceRaised },
   lyricButton: {
     paddingVertical: spacing.md,
     borderRadius: radius.md,
@@ -373,16 +368,6 @@ const styles = StyleSheet.create({
   },
   lyricButtonDisabled: { borderColor: colors.border, backgroundColor: colors.surfaceRaised },
   lyricButtonText: { ...type.label, color: colors.vibe },
-  arrangeText: { ...type.label, color: colors.bg },
-  modelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.sm,
-    marginTop: spacing.sm,
-  },
-  modelDot: { width: 6, height: 6, borderRadius: 3 },
-  modelText: { ...type.caption, color: colors.textFaint, flex: 1 },
-  planInfo: { ...type.caption, color: colors.textFaint, marginTop: 2 },
 
   vocalRow: {
     flexDirection: 'row',
@@ -427,17 +412,7 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
-  status: { ...type.caption, color: colors.textDim, textAlign: 'center' },
 
-  saveButton: {
-    paddingVertical: spacing.md,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.accent,
-    backgroundColor: colors.accentDim,
-    alignItems: 'center',
-  },
-  saveButtonText: { ...type.label, color: colors.accent },
 
   modalBackdrop: {
     flex: 1,

@@ -171,6 +171,11 @@ export interface RenderOptions {
   objectPattern: Array<{ object: string; beats: number[] }>;
   totalBars: number;
   style: Style;
+  /**
+   * Lower-cased labels of objects the user programmed themselves. Their beat
+   * plays in full in every section — the form thins only the producer's parts.
+   */
+  fixed?: ReadonlySet<string>;
 }
 
 /**
@@ -185,6 +190,7 @@ export function renderArrangement({
   objectPattern,
   totalBars,
   style,
+  fixed,
 }: RenderOptions): LoopEvent[] {
   const form = buildForm(totalBars, style);
   const events: LoopEvent[] = [];
@@ -211,7 +217,9 @@ export function renderArrangement({
       const obj = byLabel.get(pattern.object.toLowerCase());
       if (!obj) continue;
 
-      const beats = thinBeats(pattern.beats, density[obj.role] ?? 1);
+      const beats = fixed?.has(pattern.object.toLowerCase())
+        ? pattern.beats
+        : thinBeats(pattern.beats, density[obj.role] ?? 1);
 
       for (const beat of beats) {
         events.push({

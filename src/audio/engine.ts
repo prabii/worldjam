@@ -1,4 +1,4 @@
-import WorldJamAudio, { isNativeAudioAvailable } from 'worldjam-audio';
+import WorldJamAudio, { isNativeAudioAvailable, type TextureResult } from 'worldjam-audio';
 import type { LatencyReport } from '@/types';
 
 /**
@@ -8,8 +8,8 @@ import type { LatencyReport } from '@/types';
  */
 
 export const MAX_SLOTS = 16;
-/** Slots reserved at the top for accompaniment layers and the vocal take. */
-export const RESERVED_SLOTS = 6;
+/** Slots reserved at the top for accompaniment layers, the AI texture and the vocal take. */
+export const RESERVED_SLOTS = 7;
 export const OBJECT_SLOTS = MAX_SLOTS - RESERVED_SLOTS;
 
 export const SLOT_VOCAL = MAX_SLOTS - 1;
@@ -18,6 +18,8 @@ export const SLOT_CHORDS = MAX_SLOTS - 3;
 export const SLOT_ARP = MAX_SLOTS - 4;
 export const SLOT_GUITAR = MAX_SLOTS - 5;
 export const SLOT_PERC = MAX_SLOTS - 6;
+/** The Stable Audio Open Small texture layer. */
+export const SLOT_TEXTURE = MAX_SLOTS - 7;
 
 let started = false;
 
@@ -44,6 +46,27 @@ export function allocateSlot(used: number[]): number {
     if (!used.includes(i)) return i;
   }
   return -1;
+}
+
+/** Null when on-device texture generation can run, otherwise why it cannot. */
+export function textureUnavailableReason(): string | null {
+  if (typeof WorldJamAudio.textureUnavailableReason !== 'function') {
+    return 'this app build has no texture engine — rebuild the APK';
+  }
+  return WorldJamAudio.textureUnavailableReason();
+}
+
+/** Generates a texture on-device straight into `slot`. See TextureGenerator.kt. */
+export async function generateTextureInto(
+  prompt: string,
+  seconds: number,
+  seed: number,
+  slot: number,
+): Promise<TextureResult> {
+  if (typeof WorldJamAudio.generateTexture !== 'function') {
+    return { ok: false, error: 'this app build has no texture engine' };
+  }
+  return WorldJamAudio.generateTexture(prompt, seconds, seed, slot);
 }
 
 export function loadSample(slot: number, pcm: number[], gain = 1): boolean {

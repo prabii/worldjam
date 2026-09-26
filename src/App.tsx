@@ -9,6 +9,7 @@ import { CaptureScreen } from '@/screens/CaptureScreen';
 import { BottomNav, type NavTab } from '@/components/ui/BottomNav';
 import { useSession } from '@/state/sessionStore';
 import { JamScreen } from '@/screens/JamScreen';
+import { ToastHost } from '@/components/ui/ToastHost';
 import { nativeAvailable, startEngine, stopEngine } from '@/audio/engine';
 import { initModel, releaseModel } from '@/ai/modelLoader';
 import { colors, spacing, type } from '@/theme';
@@ -99,7 +100,7 @@ export default function App() {
         ) : screen === 'capture' ? (
           <CaptureScreen onDone={() => setScreen('jam')} />
         ) : (
-          <JamScreen onBack={() => setScreen('home')} />
+          <JamScreen onBack={() => setScreen('home')} onCapture={() => setScreen('capture')} />
         )}
 
         {/* Nav is hidden on the welcome screen, which is a full-bleed
@@ -118,6 +119,10 @@ export default function App() {
             <Text style={styles.bannerText}>{engineError}</Text>
           </View>
         )}
+
+        {/* The studio reports through toasts; capture keeps its own status
+            line, which sits next to the record button where eyes already are. */}
+        <ToastHost bridgeStatus={screen === 'jam'} />
       </View>
     </SafeAreaProvider>
   );

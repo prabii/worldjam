@@ -63,6 +63,12 @@ export interface SessionSnapshot {
   melodyDescription?: string;
   /** Reference artists the user named, to steer the production. */
   reference?: string;
+  /**
+   * The one-bar beat the user programmed on the studio grid. When present the
+   * model produces AROUND it: those rows are fixed, and it writes the parts
+   * that answer them.
+   */
+  userBeat?: Array<{ object: string; beats: number[] }>;
 }
 
 /**
@@ -104,23 +110,28 @@ tempo_hint: ${snapshot.bpmHint ?? 'none'}
 requested_style: ${snapshot.style}${snapshot.mood ? `
 mood: ${snapshot.mood}` : ''}${snapshot.reference ? `
 reference_artists: ${snapshot.reference}` : ''}${instruction ? `
-user_instruction: "${instruction}"` : ''}
+user_instruction: "${instruction}"` : ''}${snapshot.userBeat && snapshot.userBeat.length ? `
+user_beat (FIXED, plays exactly as written): ${JSON.stringify(snapshot.userBeat)}` : ''}
 
 HOW TO PRODUCE THIS:
 - If a melody is present, it is the song. Build everything else to support it: match its key, lock the tempo to it, and leave the beats where the voice is most exposed uncluttered.
 - Think in sections, not one repeated bar. A verse is sparse; a chorus adds the bass and more of the objects.
 - Give low, dark, long-decay objects the downbeats. Bright, short objects belong on offbeats and sixteenths, where they add movement rather than weight.
 - Leave space. Silence is what makes the objects that DO play sound deliberate. Not every object plays every bar.
-- Pick accompaniment that fits the voice: "bass" and "chords" almost always; "pad" for slow or emotional; "arp" for electronic; "guitar" for acoustic and pop.
+${snapshot.userBeat && snapshot.userBeat.length ? `- The user programmed user_beat themselves. It is the heart of the track and you do not change it. Write parts ONLY for objects NOT in user_beat, placed in the gaps it leaves (call and response, not doubling its hits); if every object is in user_beat, copy user_beat as objectPattern. Then choose the tempo and accompaniment that make their beat sound like a finished record.
+` : ''}- Pick accompaniment that fits the voice: "bass" and "chords" almost always; "pad" for slow or emotional; "arp" for electronic; "guitar" for acoustic and pop.
 
 RULES:
 - Use ONLY the object names listed above. Never invent an object.
 - beats are 1-indexed within one 4/4 bar. Fractional values (e.g. 2.5) are allowed for offbeats.
-- bpm must be between 60 and 180. If a melody tempo is given, stay within 4 BPM of it.
+- bpm must suit the style: chill 84-100, jazz 104-136, lofi 70-88, cinematic 62-84, edm 120-130, rock 100-128. If a melody tempo is given, stay within 4 BPM of it.
+- bars is 8 (a full intro, verse, build and chorus).
+- Hats and shakers can play every eighth or sixteenth; long ringing objects should play at most once or twice per bar.
+- texture: a short description (under 12 words) of ONE background sound that makes this track feel finished, like "dusty vinyl chord pad, warm" or "slow dark string swell". Never drums: the objects are the drums.
 - voiceRole is "lead" when the user sang a tune, "harmony" when the voice should sit under other parts, "texture" for wordless atmosphere, "none" when there is no voice.
 
 Reply with ONLY this JSON, no prose:
-{"bpm":92,"bars":4,"objectPattern":[{"object":"cup","beats":[1,3]},{"object":"table","beats":[2,4]}],"voiceRole":"lead","accompaniment":["bass","chords"],"style":"${snapshot.style}"}`;
+{"bpm":92,"bars":8,"objectPattern":[{"object":"cup","beats":[1,3]},{"object":"table","beats":[2,4]}],"voiceRole":"lead","accompaniment":["bass","chords"],"texture":"warm mellow chord pad","style":"${snapshot.style}"}`;
 }
 
 export interface PlanResult {
@@ -184,7 +195,7 @@ export async function generatePlan(
        * asks for a `reasoning` sentence — which cost real seconds to generate
        * and which nothing in the app ever displayed.
        */
-      runtime.generate(buildPrompt(snapshot, instruction), 128),
+      runtime.generate(buildPrompt(snapshot, instruction), 160),
       PLAN_TIMEOUT_MS,
     );
     const elapsedMs = Date.now() - started;

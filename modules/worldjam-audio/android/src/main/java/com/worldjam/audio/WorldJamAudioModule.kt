@@ -1,5 +1,6 @@
 package com.worldjam.audio
 
+import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 
@@ -34,6 +35,13 @@ class WorldJamAudioModule : Module() {
      * every device, including ones that do not have it.
      */
     private var ar: ArSessionManager? = null
+
+    private var texture: TextureGenerator? = null
+
+    private fun textureGen(): TextureGenerator? {
+        val ctx = appContext.reactContext ?: return null
+        return texture ?: TextureGenerator(ctx).also { texture = it }
+    }
 
     private fun arManager(): ArSessionManager {
         return ar ?: ArSessionManager(appContext.reactContext!!).also { ar = it }
@@ -83,6 +91,41 @@ class WorldJamAudioModule : Module() {
         Function("bufferFrames") { nativeBufferFrames() }
         Function("setMasterGain") { gain: Float -> nativeSetMasterGain(gain) }
         Function("setMetronome") { on: Boolean, bpm: Double -> nativeSetMetronome(on, bpm) }
+
+        // --- Stable Audio Open Small: AI texture layer ----------------------
+        // Runs as a separate process for ~18 s, so this is the one async call
+        // in the module. It never touches the real-time path: the finished
+        // audio is loaded into a slot exactly like a captured sample.
+
+        /** Null when generation can run, otherwise the reason it cannot. */
+        Function("textureUnavailableReason") {
+            val gen = textureGen()
+            if (gen == null) "no app context" else gen.unavailableReason()
+        }
+
+        AsyncFunction("generateTexture") { prompt: String, seconds: Double, seed: Int, slot: Int, promise: Promise ->
+            val gen = textureGen()
+            if (gen == null) {
+                promise.resolve(mapOf("ok" to false, "error" to "no app context"))
+                return@AsyncFunction
+            }
+            Thread {
+                try {
+                    val r = gen.generate(prompt, seconds, seed, nativeSampleRate(), 6)
+                    val loaded = nativeLoadSample(slot, r.pcm, 1f)
+                    promise.resolve(
+                        mapOf(
+                            "ok" to loaded,
+                            "elapsedMs" to r.elapsedMs.toDouble(),
+                            "frames" to r.pcm.size,
+                            "log" to r.log,
+                        ),
+                    )
+                } catch (e: Throwable) {
+                    promise.resolve(mapOf("ok" to false, "error" to (e.message ?: e.toString())))
+                }
+            }.apply { name = "worldjam-texture" }.start()
+        }
 
         // --- ARCore: world-anchored sound objects ---------------------------
         // Every function degrades rather than throws, so a device without
