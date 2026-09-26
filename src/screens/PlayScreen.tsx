@@ -3,14 +3,20 @@ import {
   Animated,
   Dimensions,
   Easing,
+  Keyboard,
+  KeyboardAvoidingView,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as Haptics from 'expo-haptics';
+import * as FileSystem from 'expo-file-system';
 import { useSession } from '@/state/sessionStore';
 import { gridRows, gridHitCount, stepBeats } from '@/audio/beatGrid';
 import { colors, radius, spacing, type } from '@/theme';
@@ -24,6 +30,7 @@ const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const LANE_COUNT = 3;
 const TILE_H = 72;
 const HIT_TOLERANCE = 110;
+const LEADERBOARD_PATH = `${FileSystem.documentDirectory}worldjam-leaderboard.json`;
 
 interface BeatHit {
   objectId: string;
@@ -47,6 +54,27 @@ interface Tile {
   held: boolean;
 }
 
+interface LeaderboardEntry {
+  name: string;
+  score: number;
+  combo: number;
+  date: string;
+}
+
+async function loadLeaderboard(): Promise<LeaderboardEntry[]> {
+  try {
+    const raw = await FileSystem.readAsStringAsync(LEADERBOARD_PATH);
+    return JSON.parse(raw) as LeaderboardEntry[];
+  } catch {
+    return [];
+  }
+}
+
+async function saveLeaderboard(entries: LeaderboardEntry[]): Promise<void> {
+  const sorted = [...entries].sort((a, b) => b.score - a.score).slice(0, 10);
+  await FileSystem.writeAsStringAsync(LEADERBOARD_PATH, JSON.stringify(sorted));
+}
+
 export function PlayScreen({ onBack }: Props) {
   const insets = useSafeAreaInsets();
   const objects = useSession((s) => s.objects);
@@ -55,6 +83,12 @@ export function PlayScreen({ onBack }: Props) {
   const bars = useSession((s) => s.bars);
   const playObject = useSession((s) => s.playObject);
 
+  const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  const [arEnabled, setArEnabled] = useState(false);
+
+  const [playerName, setPlayerName] = useState('');
+  const [nameSubmitted, setNameSubmitted] = useState(false);
+
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
   const [maxCombo, setMaxCombo] = useState(0);
@@ -62,13 +96,41 @@ export function PlayScreen({ onBack }: Props) {
   const [gameState, setGameState] = useState<'idle' | 'playing' | 'over'>('idle');
   const [tiles, setTiles] = useState<Tile[]>([]);
   const [hitFlash, setHitFlash] = useState<{ lane: number; color: string } | null>(null);
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+
   const tileId = useRef(0);
   const spawnIndex = useRef(0);
   const spawnTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gameStart = useRef(0);
+  const scoreRef = useRef(0);
+  const comboRef = useRef(0);
+  const maxComboRef = useRef(0);
 
   const hitZoneY = SCREEN_H - insets.bottom - 200;
   const laneW = (SCREEN_W - spacing.md * 2) / LANE_COUNT;
+
+  useEffect(() => {
+    void loadLeaderboard().then(setLeaderboard);
+  }, []);
+
+  useEffect(() => {
+    scoreRef.current = score;
+  }, [score]);
+  useEffect(() => {
+    comboRef.current = combo;
+  }, [combo]);
+  useEffect(() => {
+    maxComboRef.current = maxCombo;
+  }, [maxCombo]);
+
+  const requestAR = useCallback(async () => {
+    if (!cameraPermission?.granted) {
+      const result = await requestCameraPermission();
+      if (result.granted) setArEnabled(true);
+    } else {
+      setArEnabled(true);
+    }
+  }, [cameraPermission, requestCameraPermission]);
 
   const fallDuration = useMemo(() => {
     const beatMs = 60000 / bpm;
@@ -112,6 +174,15 @@ export function PlayScreen({ onBack }: Props) {
     [objects],
   );
 
+  const getTileScreenY = useCallback(
+    (tile: Tile) => {
+      const elapsed = Date.now() - tile.spawnedAt;
+      const total = tile.targetMs - tile.spawnedAt + (hitZoneY / SCREEN_H) * fallDuration;
+      return -TILE_H + ((SCREEN_H + TILE_H * 2) * elapsed) / Math.max(total, 1);
+    },
+    [fallDuration, hitZoneY],
+  );
+
   const spawnNextTile = useCallback(() => {
     if (beatSequence.length === 0) return;
 
@@ -126,21 +197,15 @@ export function PlayScreen({ onBack }: Props) {
     const id = tileId.current++;
     const lane = assignLane(hit, idx);
     const now = Date.now();
-    const spawnedAt = now;
     const timeUntilTarget = targetMs - now;
     const animDuration = timeUntilTarget + (hitZoneY / SCREEN_H) * fallDuration;
 
     const tile: Tile = {
-      id,
-      lane,
+      id, lane,
       label: hit.label,
       color: hit.color,
-      y,
-      spawnedAt,
-      targetMs,
-      hit: false,
-      missed: false,
-      held: false,
+      y, spawnedAt: now,
+      targetMs, hit: false, missed: false, held: false,
     };
 
     setTiles((prev) => [...prev, tile]);
@@ -191,9 +256,14 @@ export function PlayScreen({ onBack }: Props) {
     } else {
       const interval = Math.max(350, 60000 / (bpm * 2));
       const fallback = () => {
-        const labels = objects.length > 0
-          ? objects
-          : [{ id: '', label: 'Tap', color: colors.vibe }, { id: '', label: 'Beat', color: colors.ai }, { id: '', label: 'Drop', color: colors.live }];
+        const labels =
+          objects.length > 0
+            ? objects
+            : [
+                { id: '', label: 'Tap', color: colors.vibe },
+                { id: '', label: 'Beat', color: colors.ai },
+                { id: '', label: 'Drop', color: colors.live },
+              ];
         const pick = labels[tileId.current % labels.length];
         const lane = tileId.current % LANE_COUNT;
         const y = new Animated.Value(-TILE_H);
@@ -230,13 +300,29 @@ export function PlayScreen({ onBack }: Props) {
     }
   }, [bpm, beatSequence, objects, fallDuration, spawnNextTile]);
 
+  const endGame = useCallback(async (finalScore: number, finalMaxCombo: number) => {
+    if (spawnTimer.current) clearTimeout(spawnTimer.current);
+    setGameState('over');
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+
+    const name = playerName.trim() || 'Anonymous';
+    const entry: LeaderboardEntry = {
+      name,
+      score: finalScore,
+      combo: finalMaxCombo,
+      date: new Date().toLocaleDateString(),
+    };
+    const existing = await loadLeaderboard();
+    const updated = [...existing, entry].sort((a, b) => b.score - a.score).slice(0, 10);
+    await saveLeaderboard(updated);
+    setLeaderboard(updated);
+  }, [playerName]);
+
   useEffect(() => {
     if (misses >= 3 && gameState === 'playing') {
-      if (spawnTimer.current) clearTimeout(spawnTimer.current);
-      setGameState('over');
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
+      void endGame(scoreRef.current, maxComboRef.current);
     }
-  }, [misses, gameState]);
+  }, [misses, gameState, endGame]);
 
   useEffect(() => {
     return () => {
@@ -244,24 +330,14 @@ export function PlayScreen({ onBack }: Props) {
     };
   }, []);
 
-  const getTileScreenY = useCallback(
-    (tile: Tile) => {
-      const elapsed = Date.now() - tile.spawnedAt;
-      const total = (tile.targetMs - tile.spawnedAt) + (hitZoneY / SCREEN_H) * fallDuration;
-      return -TILE_H + ((SCREEN_H + TILE_H * 2) * elapsed) / Math.max(total, 1);
-    },
-    [fallDuration, hitZoneY],
-  );
-
   const handleLaneTap = useCallback(
     (lane: number) => {
       if (gameState !== 'playing') return;
 
-      const now = Date.now();
-      let bestTile: Tile | null = null;
-      let bestDist = Infinity;
-
       setTiles((prev) => {
+        let bestTile: Tile | null = null;
+        let bestDist = Infinity;
+
         for (const t of prev) {
           if (t.lane !== lane || t.hit || t.missed) continue;
           const tileY = getTileScreenY(t);
@@ -283,10 +359,19 @@ export function PlayScreen({ onBack }: Props) {
           setTimeout(() => setHitFlash(null), 150);
 
           const points = bestDist < 40 ? 20 : bestDist < 70 ? 15 : 10;
-          setScore((s) => s + points * (combo + 1));
+          setScore((s) => {
+            const next = s + points * (comboRef.current + 1);
+            scoreRef.current = next;
+            return next;
+          });
           setCombo((c) => {
             const next = c + 1;
-            setMaxCombo((m) => Math.max(m, next));
+            comboRef.current = next;
+            setMaxCombo((m) => {
+              const nm = Math.max(m, next);
+              maxComboRef.current = nm;
+              return nm;
+            });
             return next;
           });
         }
@@ -294,7 +379,7 @@ export function PlayScreen({ onBack }: Props) {
         return prev;
       });
     },
-    [combo, gameState, getTileScreenY, hitZoneY, objects, playObject],
+    [gameState, getTileScreenY, hitZoneY, objects, playObject],
   );
 
   const handleLaneLongPress = useCallback(
@@ -316,11 +401,19 @@ export function PlayScreen({ onBack }: Props) {
             setHitFlash({ lane, color: t.color });
             setTimeout(() => setHitFlash(null), 300);
 
-            const points = 30;
-            setScore((s) => s + points * (combo + 1));
+            setScore((s) => {
+              const next = s + 30 * (comboRef.current + 1);
+              scoreRef.current = next;
+              return next;
+            });
             setCombo((c) => {
               const next = c + 1;
-              setMaxCombo((m) => Math.max(m, next));
+              comboRef.current = next;
+              setMaxCombo((m) => {
+                const nm = Math.max(m, next);
+                maxComboRef.current = nm;
+                return nm;
+              });
               return next;
             });
             break;
@@ -329,26 +422,83 @@ export function PlayScreen({ onBack }: Props) {
         return prev;
       });
     },
-    [combo, gameState, getTileScreenY, hitZoneY, objects, playObject],
+    [gameState, getTileScreenY, hitZoneY, objects, playObject],
   );
 
   const hasBeat = gridHitCount(grid) > 0 && objects.length > 0;
 
-  return (
-    <View style={styles.root}>
+  const handleNameSubmit = () => {
+    Keyboard.dismiss();
+    if (playerName.trim().length === 0) return;
+    setNameSubmitted(true);
+  };
+
+  // ── RENDER ──────────────────────────────────────────────────────────────────
+
+  const gameContent = (
+    <>
       {/* Header */}
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
         <Pressable onPress={onBack} accessibilityRole="button" style={styles.back}>
           <Text style={styles.backChevron}>{'‹'}</Text>
           <Text style={styles.backText}>Back</Text>
         </Pressable>
-        <Text style={styles.screenTitle}>Play Zone</Text>
+        <Text style={styles.screenTitle}>AR Play Zone</Text>
         <View style={styles.scoreWrap}>
           <Text style={styles.scoreNum}>{score}</Text>
         </View>
       </View>
 
-      {gameState === 'idle' && (
+      {/* NAME ENTRY — shown before game starts if not yet submitted */}
+      {gameState === 'idle' && !nameSubmitted && (
+        <KeyboardAvoidingView
+          behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+          style={styles.nameOverlay}
+        >
+          <View style={styles.nameCard}>
+            <LinearGradient
+              colors={gradients.brand}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.nameIcon}
+            >
+              <Text style={styles.nameIconGlyph}>🎮</Text>
+            </LinearGradient>
+            <Text style={styles.nameTitle}>Enter Your Name</Text>
+            <Text style={styles.nameSub}>Your score will be saved to the leaderboard</Text>
+            <TextInput
+              style={styles.nameInput}
+              value={playerName}
+              onChangeText={setPlayerName}
+              placeholder="Your name..."
+              placeholderTextColor={colors.textFaint}
+              maxLength={20}
+              autoFocus
+              onSubmitEditing={handleNameSubmit}
+              returnKeyType="done"
+            />
+            <Pressable onPress={handleNameSubmit} style={styles.nameBtn}>
+              <LinearGradient
+                colors={gradients.brand}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.nameBtnInner}
+              >
+                <Text style={styles.nameBtnText}>Continue →</Text>
+              </LinearGradient>
+            </Pressable>
+            <Pressable
+              onPress={() => { setPlayerName('Anonymous'); setNameSubmitted(true); }}
+              style={styles.skipBtn}
+            >
+              <Text style={styles.skipText}>Skip</Text>
+            </Pressable>
+          </View>
+        </KeyboardAvoidingView>
+      )}
+
+      {/* START SCREEN */}
+      {gameState === 'idle' && nameSubmitted && (
         <View style={styles.startOverlay}>
           <LinearGradient
             colors={gradients.brand}
@@ -358,12 +508,21 @@ export function PlayScreen({ onBack }: Props) {
           >
             <Text style={styles.startGlyph}>♪</Text>
           </LinearGradient>
-          <Text style={styles.startTitle}>Rhythm Game</Text>
+          <Text style={styles.startTitle}>Hey, {playerName || 'Creator'}!</Text>
           <Text style={styles.startSub}>
             {hasBeat
-              ? `Your beat at ${bpm} BPM · ${objects.length} sound${objects.length === 1 ? '' : 's'}\nTiles fall to YOUR rhythm.\nTap to hit · Long press to hold · Miss 3 = game over`
-              : 'Create a beat in Studio first!\nOr play with random tiles.\nTap to hit · Long press to hold · Miss 3 = game over'}
+              ? `Your beat at ${bpm} BPM · ${objects.length} sound${objects.length === 1 ? '' : 's'}\nTiles fall to YOUR rhythm\nTap · Long press to hold · 3 misses = game over`
+              : 'Create a beat in Studio first!\nOr play with random tiles\nTap · Long press to hold · 3 misses = game over'}
           </Text>
+
+          {/* AR toggle */}
+          <Pressable onPress={requestAR} style={styles.arToggle}>
+            <View style={[styles.arDot, arEnabled && styles.arDotOn]} />
+            <Text style={[styles.arLabel, arEnabled && { color: colors.live }]}>
+              {arEnabled ? 'AR Camera On' : 'Enable AR Camera'}
+            </Text>
+          </Pressable>
+
           <Pressable onPress={startGame} style={styles.startBtn}>
             <LinearGradient
               colors={gradients.brand}
@@ -376,9 +535,24 @@ export function PlayScreen({ onBack }: Props) {
               </Text>
             </LinearGradient>
           </Pressable>
+
+          {/* Mini leaderboard on start */}
+          {leaderboard.length > 0 && (
+            <View style={styles.miniBoard}>
+              <Text style={styles.miniBoardTitle}>🏆 TOP SCORES</Text>
+              {leaderboard.slice(0, 3).map((e, i) => (
+                <View key={i} style={styles.miniBoardRow}>
+                  <Text style={styles.miniBoardRank}>#{i + 1}</Text>
+                  <Text style={styles.miniBoardName}>{e.name}</Text>
+                  <Text style={styles.miniBoardScore}>{e.score}</Text>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
       )}
 
+      {/* PLAYING */}
       {gameState === 'playing' && (
         <>
           {/* HUD */}
@@ -399,10 +573,7 @@ export function PlayScreen({ onBack }: Props) {
                 {[0, 1, 2].map((i) => (
                   <View
                     key={i}
-                    style={[
-                      styles.missDot,
-                      i < misses && styles.missDotFilled,
-                    ]}
+                    style={[styles.missDot, i < misses && styles.missDotFilled]}
                   />
                 ))}
               </View>
@@ -419,7 +590,7 @@ export function PlayScreen({ onBack }: Props) {
             ))}
           </View>
 
-          {/* Hit zone glow */}
+          {/* Hit zone */}
           <View style={[styles.hitZone, { top: hitZoneY - 2 }]} pointerEvents="none">
             <LinearGradient
               colors={['rgba(10,132,255,0)', 'rgba(10,132,255,0.2)', 'rgba(10,132,255,0)']}
@@ -443,17 +614,18 @@ export function PlayScreen({ onBack }: Props) {
                     width: laneW - 16,
                     transform: [{ translateY: t.y }],
                     backgroundColor: t.missed
-                      ? 'rgba(255,69,58,0.3)'
-                      : t.color,
-                    borderColor: t.missed ? colors.accent : 'rgba(255,255,255,0.15)',
+                      ? 'rgba(255,69,58,0.25)'
+                      : `${t.color}CC`,
+                    borderColor: t.missed
+                      ? colors.accent
+                      : 'rgba(255,255,255,0.25)',
                   },
                 ]}
               >
+                {/* Inner glow bar */}
+                <View style={[styles.tileGlow, { backgroundColor: t.missed ? 'transparent' : t.color }]} />
                 <Text
-                  style={[
-                    styles.tileLabel,
-                    t.missed && { color: colors.accent },
-                  ]}
+                  style={[styles.tileLabel, t.missed && { color: colors.accent }]}
                   numberOfLines={1}
                 >
                   {t.missed ? '✕' : t.label}
@@ -461,7 +633,7 @@ export function PlayScreen({ onBack }: Props) {
               </Animated.View>
             ))}
 
-          {/* Hit flash effect */}
+          {/* Hit flash */}
           {hitFlash && (
             <View
               style={[
@@ -477,7 +649,12 @@ export function PlayScreen({ onBack }: Props) {
             />
           )}
 
-          {/* Tap zones at bottom */}
+          {/* Player name badge */}
+          <View style={[styles.playerBadge, { bottom: insets.bottom + 120 }]}>
+            <Text style={styles.playerBadgeText}>{playerName || 'Player'}</Text>
+          </View>
+
+          {/* Tap zones */}
           <View style={[styles.tapArea, { bottom: insets.bottom + 8 }]}>
             {Array.from({ length: LANE_COUNT }).map((_, i) => (
               <Pressable
@@ -500,20 +677,44 @@ export function PlayScreen({ onBack }: Props) {
         </>
       )}
 
+      {/* GAME OVER */}
       {gameState === 'over' && (
         <View style={styles.startOverlay}>
           <Text style={styles.overTitle}>
-            {score > 500 ? 'Amazing!' : score > 200 ? 'Nice Beat!' : 'Game Over'}
+            {score > 500 ? '🔥 Amazing!' : score > 200 ? '🎵 Nice Beat!' : '💀 Game Over'}
           </Text>
-          <Text style={styles.overSub}>
-            {misses >= 3 ? 'You missed 3 tiles!' : 'Round complete'}
-          </Text>
+          <Text style={styles.overSub}>{playerName || 'Player'} · {misses >= 3 ? '3 misses' : 'Round complete'}</Text>
 
           <View style={styles.overStats}>
             <StatBadge label="Score" value={String(score)} color={colors.vibe} />
             <StatBadge label="Best Combo" value={`${maxCombo}x`} color={colors.warn} />
             <StatBadge label="Misses" value={String(misses)} color={colors.accent} />
           </View>
+
+          {/* Full leaderboard */}
+          {leaderboard.length > 0 && (
+            <View style={styles.leaderboard}>
+              <Text style={styles.lbTitle}>🏆 LEADERBOARD</Text>
+              {leaderboard.map((e, i) => {
+                const isMe = e.name === (playerName || 'Anonymous') && e.score === score;
+                return (
+                  <View
+                    key={i}
+                    style={[styles.lbRow, isMe && styles.lbRowHighlight]}
+                  >
+                    <Text style={[styles.lbRank, i === 0 && { color: colors.warn }]}>
+                      {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`}
+                    </Text>
+                    <Text style={[styles.lbName, isMe && { color: colors.vibe }]} numberOfLines={1}>
+                      {e.name}
+                    </Text>
+                    <Text style={styles.lbScore}>{e.score}</Text>
+                    <Text style={styles.lbCombo}>{e.combo}x</Text>
+                  </View>
+                );
+              })}
+            </View>
+          )}
 
           <View style={styles.overButtons}>
             <Pressable onPress={startGame} style={styles.startBtn}>
@@ -532,6 +733,35 @@ export function PlayScreen({ onBack }: Props) {
           </View>
         </View>
       )}
+    </>
+  );
+
+  return (
+    <View style={styles.root}>
+      {/* AR Camera background — only when enabled and camera permission granted */}
+      {arEnabled && cameraPermission?.granted ? (
+        <View style={StyleSheet.absoluteFill}>
+          <CameraView
+            style={StyleSheet.absoluteFill}
+            facing="back"
+          />
+          {/* Dark overlay so tiles stay readable over camera feed */}
+          <LinearGradient
+            colors={['rgba(0,0,0,0.55)', 'rgba(0,0,0,0.35)', 'rgba(0,0,0,0.65)']}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+          />
+        </View>
+      ) : (
+        /* Fallback: dark gradient background */
+        <LinearGradient
+          colors={['#050508', '#0A0A14', '#050508']}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
+        />
+      )}
+
+      {gameContent}
     </View>
   );
 }
@@ -576,6 +806,58 @@ const styles = StyleSheet.create({
   },
   scoreNum: { ...type.label, fontSize: 16, color: colors.warn, fontVariant: ['tabular-nums'] },
 
+  // ── Name entry ─────────────────────────────────────────────────────────────
+  nameOverlay: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing.xl,
+  },
+  nameCard: {
+    width: '100%',
+    alignItems: 'center',
+    gap: spacing.md,
+    padding: spacing.xl,
+    borderRadius: radius.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: 'rgba(10,10,14,0.92)',
+  },
+  nameIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  nameIconGlyph: { fontSize: 32 },
+  nameTitle: { ...type.title, fontSize: 22, color: colors.text },
+  nameSub: { ...type.body, color: colors.textDim, textAlign: 'center' },
+  nameInput: {
+    width: '100%',
+    height: 52,
+    borderRadius: radius.lg,
+    borderWidth: 1.5,
+    borderColor: colors.vibe,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    paddingHorizontal: spacing.lg,
+    ...type.body,
+    color: colors.text,
+    fontSize: 18,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+  },
+  nameBtn: { marginTop: spacing.sm, width: '100%' },
+  nameBtnInner: {
+    paddingVertical: spacing.lg,
+    borderRadius: radius.pill,
+    alignItems: 'center',
+  },
+  nameBtnText: { ...type.label, fontSize: 16, color: '#FFFFFF' },
+  skipBtn: { paddingVertical: spacing.sm },
+  skipText: { ...type.caption, color: colors.textFaint },
+
+  // ── HUD ───────────────────────────────────────────────────────────────────
   hud: {
     flexDirection: 'row',
     justifyContent: 'center',
@@ -588,185 +870,169 @@ const styles = StyleSheet.create({
   hudValue: { ...type.title, fontSize: 20, color: colors.text, fontVariant: ['tabular-nums'] },
   missRow: { flexDirection: 'row', gap: 6 },
   missDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    borderWidth: 2,
-    borderColor: 'rgba(255,69,58,0.3)',
+    width: 12, height: 12, borderRadius: 6,
+    borderWidth: 2, borderColor: 'rgba(255,69,58,0.3)',
   },
-  missDotFilled: {
-    backgroundColor: colors.accent,
-    borderColor: colors.accent,
-  },
+  missDotFilled: { backgroundColor: colors.accent, borderColor: colors.accent },
 
+  // ── Lanes ─────────────────────────────────────────────────────────────────
   lanes: { ...StyleSheet.absoluteFillObject, zIndex: 0 },
   laneLine: {
-    position: 'absolute',
-    top: 0,
-    bottom: 0,
-    width: 1,
-    backgroundColor: 'rgba(255,255,255,0.03)',
+    position: 'absolute', top: 0, bottom: 0,
+    width: 1, backgroundColor: 'rgba(255,255,255,0.06)',
   },
 
+  // ── Hit zone ──────────────────────────────────────────────────────────────
   hitZone: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 6,
-    zIndex: 1,
-    alignItems: 'center',
+    position: 'absolute', left: 0, right: 0,
+    height: 6, zIndex: 1, alignItems: 'center',
   },
   hitZoneGlow: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: -35,
-    height: 76,
+    position: 'absolute', left: 0, right: 0, top: -35, height: 76,
   },
   hitZoneLine: {
-    height: 2,
-    marginHorizontal: spacing.md,
-    borderRadius: 1,
-    backgroundColor: colors.vibe,
-    alignSelf: 'stretch',
+    height: 2, marginHorizontal: spacing.md, borderRadius: 1,
+    backgroundColor: colors.vibe, alignSelf: 'stretch',
   },
   hitZoneLabel: {
-    ...type.caption,
-    fontSize: 9,
-    letterSpacing: 3,
-    color: 'rgba(10,132,255,0.5)',
-    marginTop: 6,
+    ...type.caption, fontSize: 9, letterSpacing: 3,
+    color: 'rgba(10,132,255,0.5)', marginTop: 6,
   },
 
+  // ── Tiles ─────────────────────────────────────────────────────────────────
   tile: {
-    position: 'absolute',
-    height: TILE_H,
-    borderRadius: radius.md,
-    borderWidth: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 2,
+    position: 'absolute', height: TILE_H,
+    borderRadius: radius.md, borderWidth: 1.5,
+    alignItems: 'center', justifyContent: 'center', zIndex: 2,
+    overflow: 'hidden',
+  },
+  tileGlow: {
+    position: 'absolute', top: 0, left: 0, right: 0, height: 3,
+    opacity: 0.8,
   },
   tileLabel: {
-    ...type.label,
-    fontSize: 15,
-    color: '#FFFFFF',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+    ...type.label, fontSize: 14, color: '#FFFFFF',
+    textTransform: 'uppercase', letterSpacing: 1,
   },
-
   flashOverlay: {
-    position: 'absolute',
-    height: 80,
-    opacity: 0.15,
-    borderRadius: radius.md,
-    zIndex: 3,
+    position: 'absolute', height: 80,
+    opacity: 0.18, borderRadius: radius.md, zIndex: 3,
   },
 
+  // ── Tap zones ─────────────────────────────────────────────────────────────
+  playerBadge: {
+    position: 'absolute', alignSelf: 'center', zIndex: 5,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.xs,
+    borderRadius: radius.pill, backgroundColor: 'rgba(10,132,255,0.15)',
+    borderWidth: 1, borderColor: 'rgba(10,132,255,0.3)',
+  },
+  playerBadgeText: { ...type.caption, fontSize: 11, color: colors.vibe, letterSpacing: 1 },
   tapArea: {
-    position: 'absolute',
-    left: spacing.md,
-    right: spacing.md,
-    height: 100,
-    flexDirection: 'row',
-    zIndex: 5,
+    position: 'absolute', left: spacing.md, right: spacing.md,
+    height: 100, flexDirection: 'row', zIndex: 5,
   },
-  tapLane: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderRadius: radius.lg,
-  },
-  tapLanePressed: {
-    backgroundColor: 'rgba(255,255,255,0.05)',
-  },
+  tapLane: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: radius.lg },
+  tapLanePressed: { backgroundColor: 'rgba(255,255,255,0.07)' },
   tapTarget: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.04)',
-    borderWidth: 1.5,
-    borderColor: 'rgba(255,255,255,0.1)',
-    gap: 2,
+    width: 64, height: 64, borderRadius: 32,
+    alignItems: 'center', justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.12)', gap: 2,
   },
   tapCircle: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    borderWidth: 2,
-    borderColor: 'rgba(255,255,255,0.25)',
+    width: 18, height: 18, borderRadius: 9,
+    borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)',
   },
-  tapText: {
-    ...type.caption,
-    fontSize: 8,
-    letterSpacing: 2,
-    color: 'rgba(255,255,255,0.3)',
-  },
+  tapText: { ...type.caption, fontSize: 8, letterSpacing: 2, color: 'rgba(255,255,255,0.35)' },
 
+  // ── Start / over overlays ─────────────────────────────────────────────────
   startOverlay: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.lg,
-    paddingHorizontal: spacing.xl,
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    gap: spacing.md, paddingHorizontal: spacing.xl,
   },
   startIcon: {
-    width: 96,
-    height: 96,
-    borderRadius: 48,
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 80, height: 80, borderRadius: 40,
+    alignItems: 'center', justifyContent: 'center',
   },
-  startGlyph: { fontSize: 40, color: '#FFFFFF' },
-  startTitle: { ...type.display, fontSize: 32, color: colors.text },
-  startSub: {
-    ...type.body,
-    color: colors.textDim,
-    textAlign: 'center',
-    lineHeight: 24,
+  startGlyph: { fontSize: 36, color: '#FFFFFF' },
+  startTitle: { ...type.display, fontSize: 28, color: colors.text, textAlign: 'center' },
+  startSub: { ...type.body, color: colors.textDim, textAlign: 'center', lineHeight: 22 },
+
+  arToggle: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border,
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
-  startBtn: { marginTop: spacing.md },
+  arDot: {
+    width: 10, height: 10, borderRadius: 5,
+    backgroundColor: colors.textFaint,
+  },
+  arDotOn: { backgroundColor: colors.live },
+  arLabel: { ...type.caption, color: colors.textDim },
+
+  startBtn: { marginTop: spacing.sm },
   startBtnInner: {
-    paddingHorizontal: spacing.xxl * 1.5,
-    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.xxl * 1.5, paddingVertical: spacing.lg,
     borderRadius: radius.pill,
   },
   startBtnText: { ...type.label, fontSize: 16, color: '#FFFFFF', letterSpacing: 0.5 },
 
-  overTitle: { ...type.display, fontSize: 34, color: colors.text },
+  // ── Mini leaderboard (start screen) ──────────────────────────────────────
+  miniBoard: {
+    width: '100%', borderRadius: radius.lg, borderWidth: 1,
+    borderColor: colors.border, backgroundColor: 'rgba(10,10,14,0.85)',
+    padding: spacing.lg, gap: spacing.sm, marginTop: spacing.sm,
+  },
+  miniBoardTitle: {
+    ...type.caption, letterSpacing: 2, color: colors.warn, marginBottom: spacing.xs,
+  },
+  miniBoardRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+  },
+  miniBoardRank: { ...type.caption, color: colors.textFaint, width: 24 },
+  miniBoardName: { ...type.label, color: colors.text, flex: 1, fontSize: 13 },
+  miniBoardScore: { ...type.label, color: colors.warn, fontSize: 14, fontVariant: ['tabular-nums'] },
+
+  // ── Full leaderboard (game over) ──────────────────────────────────────────
+  leaderboard: {
+    width: '100%', borderRadius: radius.lg, borderWidth: 1,
+    borderColor: colors.border, backgroundColor: 'rgba(10,10,14,0.9)',
+    padding: spacing.lg, gap: spacing.sm, maxHeight: 280,
+  },
+  lbTitle: {
+    ...type.caption, letterSpacing: 2, color: colors.warn, marginBottom: spacing.xs,
+  },
+  lbRow: {
+    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    paddingVertical: 4,
+  },
+  lbRowHighlight: {
+    backgroundColor: 'rgba(10,132,255,0.1)',
+    borderRadius: radius.sm, paddingHorizontal: spacing.sm,
+  },
+  lbRank: { ...type.caption, color: colors.textFaint, width: 28, textAlign: 'center' },
+  lbName: { ...type.label, color: colors.text, flex: 1, fontSize: 13 },
+  lbScore: { ...type.label, color: colors.warn, fontSize: 13, fontVariant: ['tabular-nums'] },
+  lbCombo: { ...type.caption, color: colors.textDim, width: 32, textAlign: 'right' },
+
+  // ── Game over ─────────────────────────────────────────────────────────────
+  overTitle: { ...type.display, fontSize: 30, color: colors.text, textAlign: 'center' },
   overSub: { ...type.body, color: colors.textDim },
-  overStats: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginTop: spacing.md,
-  },
-  overButtons: {
-    gap: spacing.md,
-    alignItems: 'center',
-    marginTop: spacing.lg,
-  },
+  overStats: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
+  overButtons: { gap: spacing.md, alignItems: 'center', marginTop: spacing.md },
   backToStudio: {
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.md,
-    borderRadius: radius.pill,
-    borderWidth: 1,
-    borderColor: colors.border,
+    paddingHorizontal: spacing.xl, paddingVertical: spacing.md,
+    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border,
   },
   backToStudioText: { ...type.label, color: colors.textDim },
 
   statBadge: {
-    alignItems: 'center',
-    gap: 4,
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.lg,
-    borderRadius: radius.lg,
-    backgroundColor: colors.surfaceSolid,
-    borderWidth: 1,
-    borderColor: colors.border,
-    minWidth: 95,
+    alignItems: 'center', gap: 4, paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.lg, borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSolid, borderWidth: 1,
+    borderColor: colors.border, minWidth: 90,
   },
-  statValue: { ...type.title, fontSize: 26, fontVariant: ['tabular-nums'] },
+  statValue: { ...type.title, fontSize: 24, fontVariant: ['tabular-nums'] },
   statLabel: { ...type.caption, color: colors.textDim },
 });
