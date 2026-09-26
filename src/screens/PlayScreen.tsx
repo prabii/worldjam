@@ -33,8 +33,8 @@ const LANE_COUNT = 3;
 const TILE_H = 80;
 // Piano blocks at bottom — tall enough to tap with a foot
 const PIANO_H = 180;
-// Very generous hit zone for foot-tapping
-const HIT_TOLERANCE = 150;
+// Any tile that hasn't fully passed the piano top counts as hittable
+// (distance from piano top to screen bottom = PIANO_H + insets.bottom)
 const LEADERBOARD_PATH = `${FileSystem.documentDirectory}worldjam-leaderboard.json`;
 
 // Beat source modes
@@ -58,6 +58,8 @@ interface Tile {
   targetMs: number;
   hit: boolean;
   missed: boolean;
+  /** Cached numeric Y for hit detection — updated from Animated value. */
+  currentY: number;
 }
 
 interface LeaderboardEntry {
@@ -139,9 +141,11 @@ export function PlayScreen({ onBack }: Props) {
   const comboRef = useRef(0);
   const maxComboRef = useRef(0);
   const missesRef = useRef(0);
+  const pianoTopRef = useRef(SCREEN_H - 200);
 
   // Piano block dimensions
   const pianoTop = SCREEN_H - insets.bottom - PIANO_H;
+  pianoTopRef.current = pianoTop;
   const laneW = SCREEN_W / LANE_COUNT;
   // Tiles hit zone is just above the piano blocks
   const hitZoneY = pianoTop - TILE_H / 2;
@@ -211,14 +215,10 @@ export function PlayScreen({ onBack }: Props) {
     return hits.sort((a, b) => a.beatTime - b.beatTime);
   }, [grid, objects, bars, plan, beatSource]);
 
-  const getTileScreenY = useCallback(
-    (tile: Tile) => {
-      const elapsed = Date.now() - tile.spawnedAt;
-      const total = tile.targetMs - tile.spawnedAt + (hitZoneY / SCREEN_H) * fallDuration;
-      return -TILE_H + ((SCREEN_H + TILE_H * 2) * elapsed) / Math.max(total, 1);
-    },
-    [fallDuration, hitZoneY],
-  );
+  // Hit window: tile is hittable from when it enters the top of the piano block
+  // down to when it exits the bottom of the screen.
+  const hitWindowTop = useCallback(() => pianoTopRef.current - TILE_H * 1.5, []);
+  const hitWindowBottom = useCallback(() => SCREEN_H + TILE_H, []);
 
   const spawnNextTile = useCallback(() => {
     if (beatSequence.length === 0) return;
@@ -239,8 +239,11 @@ export function PlayScreen({ onBack }: Props) {
     const tile: Tile = {
       id, lane: hit.lane, label: hit.label, color: hit.color,
       y, spawnedAt: now, targetMs,
-      hit: false, missed: false,
+      hit: false, missed: false, currentY: -TILE_H,
     };
+
+    // Keep currentY in sync with the animation so hit detection is accurate
+    y.addListener(({ value }) => { tile.currentY = value; });
 
     setTiles((prev) => [...prev, tile]);
 
@@ -318,21 +321,31 @@ export function PlayScreen({ onBack }: Props) {
 
   useEffect(() => () => { if (spawnTimer.current) clearTimeout(spawnTimer.current); }, []);
 
-  // Piano block press — generous target for foot/leg
+  // Piano block press — foot/leg tap detection
+  // Strategy: hit the nearest tile in the lane that is anywhere in the lower
+  // half of the screen (past the halfway point). No distance penalty for being
+  // slightly early/late — a foot press is coarse, so we accept any tile that's
+  // in play. Score is based on how close to the piano top edge the tile is.
   const handlePianoPress = useCallback(
     (lane: number) => {
       if (step !== 'playing') return;
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
 
+      const wTop = hitWindowTop();
+      const wBottom = hitWindowBottom();
+
       setTiles((prev) => {
+        // Pick the tile closest to the piano top edge (pianoTopRef.current)
         let bestTile: Tile | null = null;
         let bestDist = Infinity;
 
         for (const t of prev) {
           if (t.lane !== lane || t.hit || t.missed) continue;
-          const tileY = getTileScreenY(t);
-          const dist = Math.abs(tileY - hitZoneY);
-          if (dist < HIT_TOLERANCE && dist < bestDist) {
+          const cy = t.currentY;
+          // Accept any tile that has entered the lower half of the screen
+          if (cy < wTop || cy > wBottom) continue;
+          const dist = Math.abs(cy - pianoTopRef.current);
+          if (dist < bestDist) {
             bestDist = dist;
             bestTile = t;
           }
@@ -343,9 +356,14 @@ export function PlayScreen({ onBack }: Props) {
           const obj = laneObjects[lane];
           if (obj) playObject(obj.id);
 
-          const hitType = bestDist < 40 ? 'perfect' : bestDist < 80 ? 'good' : 'ok';
+          // Score: perfect if tile is near the piano top, good if slightly off,
+          // ok if it slipped past (foot was slow)
+          const hitType =
+            bestDist < pianoTopRef.current * 0.15 ? 'perfect'
+            : bestDist < pianoTopRef.current * 0.4 ? 'good'
+            : 'ok';
           setHitEffect({ lane, type: hitType });
-          setTimeout(() => setHitEffect(null), 300);
+          setTimeout(() => setHitEffect(null), 350);
 
           const points = hitType === 'perfect' ? 30 : hitType === 'good' ? 20 : 10;
           const newScore = scoreRef.current + points * (comboRef.current + 1);
@@ -364,7 +382,7 @@ export function PlayScreen({ onBack }: Props) {
         return prev;
       });
     },
-    [step, getTileScreenY, hitZoneY, laneObjects, playObject],
+    [step, hitWindowTop, hitWindowBottom, laneObjects, playObject],
   );
 
   // ─── SELECT JAM FLOW ──────────────────────────────────────────────────────
@@ -714,6 +732,9 @@ export function PlayScreen({ onBack }: Props) {
                     handlePianoPress(i);
                   }}
                   onPressOut={() => setPressedLane(null)}
+                  // Extend touch target 200px upward so tiles entering the
+                  // piano zone register even before the foot fully lands
+                  hitSlop={{ top: 220, left: 0, right: 0, bottom: 0 }}
                   style={[
                     styles.pianoBlock,
                     {
