@@ -111,6 +111,11 @@ export interface ArrangementPlan {
   /** Present when the plan came from the rule-based fallback, not the model. */
   source: 'gemma' | 'fallback';
   reasoning?: string;
+  /**
+   * A short sound description for the AI texture layer (Stable Audio Open
+   * Small), e.g. "dusty vinyl pad, warm". Written by Gemma; optional.
+   */
+  texture?: string;
 }
 
 export type AccompanimentLayer = 'bass' | 'chords' | 'pad' | 'arp' | 'guitar' | 'perc';

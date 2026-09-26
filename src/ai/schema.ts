@@ -4,6 +4,7 @@ import type {
   Style,
   WorldJamObject,
 } from '@/types';
+import { sanitiseTexture } from '@/audio/texture';
 
 /**
  * The validator that stands between the model and the audio engine.
@@ -194,6 +195,7 @@ export function validatePlan(
       style,
       source: 'gemma',
       reasoning: typeof raw.reasoning === 'string' ? raw.reasoning : undefined,
+      texture: sanitiseTexture(raw.texture) ?? undefined,
     },
     repairs,
   };

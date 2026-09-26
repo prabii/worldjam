@@ -12,6 +12,8 @@ interface Props {
   trailing?: string;
   disabled?: boolean;
   busy?: boolean;
+  /** What the button says while busy. */
+  busyLabel?: string;
   /** Pill by default, matching the primary CTA in the design system. */
   shape?: 'pill' | 'rounded';
   gradient?: GradientStops;
@@ -32,6 +34,7 @@ export function GradientButton({
   trailing,
   disabled,
   busy,
+  busyLabel = 'Working…',
   shape = 'pill',
   gradient = gradients.brand,
   style,
@@ -84,7 +87,7 @@ export function GradientButton({
           style={[styles.button, { borderRadius: br }]}
         >
           <Text style={[styles.label, inactive && styles.labelDisabled]}>
-            {busy ? 'Working…' : label}
+            {busy ? busyLabel : label}
           </Text>
           {trailing && !busy && (
             <Text style={[styles.trailing, inactive && styles.labelDisabled]}>

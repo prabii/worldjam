@@ -14,7 +14,10 @@ import {
   SLOT_CHORDS,
   SLOT_GUITAR,
   SLOT_PERC,
+  SLOT_TEXTURE,
   SLOT_VOCAL,
+  generateTextureInto,
+  textureUnavailableReason,
   allocateSlot,
   clearSlot,
   loadSample,
@@ -31,6 +34,28 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { transport } from '@/audio/transport';
 import { renderArrangement } from '@/audio/arrangement';
+import { applyGroove, describeFeel, directTempo } from '@/audio/groove';
+import {
+  buildTexturePrompt,
+  textureEvents,
+  textureSeconds,
+  textureSeed,
+} from '@/audio/texture';
+import {
+  EMPTY_GRID,
+  beatToStep,
+  describeGrid,
+  gridHitCount,
+  gridToEvents,
+  gridToPattern,
+  layerUserBeat,
+  removeRow,
+  resizeGrid,
+  setStep,
+  toggleStep,
+  type BeatGrid,
+  type GridSteps,
+} from '@/audio/beatGrid';
 import { cleanCapture, estimateNoiseFloor, findTransientWindow } from '@/dsp/denoise';
 import { describeMelody, refineMelody } from '@/dsp/melody';
 import { buildRhythmCues, describeCapture } from '@/audio/guidance';
@@ -136,11 +161,42 @@ interface SessionState {
   armed: boolean;
   liveEvents: LoopEvent[];
 
+  // --- the step grid: the user's own beat ---
+  grid: BeatGrid;
+  /** While on and playing, tapping a sound writes it onto the nearest step. */
+  gridRecording: boolean;
+  /** AI producer mode: the model builds a full track around the grid beat. */
+  aiMode: boolean;
+  /**
+   * The producer's plan before the user's beat is laid in. Kept so a grid
+   * edit in AI mode re-renders instantly without asking the model again.
+   */
+  producerPlan: ArrangementPlan | null;
+  /** AI texture layer: Stable Audio Open Small, generated on the phone. */
+  textureOn: boolean;
+  textureStatus: 'idle' | 'unavailable' | 'generating' | 'ready' | 'error';
+  /** The prompt being or last generated, or why generation cannot run. */
+  textureInfo: string | null;
+  setTextureOn: (on: boolean) => void;
+  /** A fresh take of the texture with a new seed. */
+  regenerateTexture: () => void;
+  toggleGridStep: (id: string, step: number) => void;
+  setGridSteps: (steps: GridSteps) => void;
+  clearGrid: () => void;
+  toggleGridRecord: () => void;
+  /** Turning AI mode on produces a track around the beat; off plays the raw beat. */
+  setAiMode: (on: boolean) => Promise<void>;
+
   // --- actions ---
   beginCapture: (target: CaptureTarget) => boolean;
   finishCapture: () => Promise<void>;
   cancelCapture: () => void;
   removeObject: (id: string) => void;
+  /**
+   * Moves an object in the AR view. Position is spatial audio, not decoration:
+   * dragging an object left pans its sound left, live, even mid-loop.
+   */
+  moveObject: (id: string, x: number, y: number) => void;
   /** Names an object after its sound has been captured. */
   renameObject: (id: string, label: string) => void;
   playObject: (id: string) => void;
@@ -223,6 +279,73 @@ export const useSession = create<SessionState>((set, get) => ({
   armed: false,
   liveEvents: [],
 
+  textureOn: true,
+  textureStatus: 'idle',
+  textureInfo: null,
+
+  setTextureOn: (on) => {
+    set({ textureOn: on });
+    if (on) void requestTexture(set, get);
+    else syncBeatLoops(set, get);
+  },
+
+  regenerateTexture: () => {
+    void requestTexture(set, get, true);
+  },
+
+  grid: EMPTY_GRID,
+  gridRecording: false,
+  aiMode: false,
+  producerPlan: null,
+
+  toggleGridStep: (id, step) => {
+    set((s) => ({ grid: toggleStep(s.grid, id, step) }));
+    afterGridEdit(set, get);
+  },
+
+  setGridSteps: (steps) => {
+    set((s) => ({ grid: resizeGrid(s.grid, steps) }));
+    afterGridEdit(set, get);
+  },
+
+  clearGrid: () => {
+    set((s) => ({ grid: { ...s.grid, cells: {} }, gridRecording: false }));
+    afterGridEdit(set, get);
+    set({ statusMessage: 'Beat cleared' });
+  },
+
+  toggleGridRecord: () => {
+    const s = get();
+    if (s.gridRecording) {
+      setMetronome(false, s.bpm);
+      set({ gridRecording: false, statusMessage: describeGrid(s.grid, s.objects) });
+      return;
+    }
+    // Recording needs a running clock to land taps against, and a click so
+    // the user can hear where the beat is.
+    if (!s.playing) get().togglePlay();
+    setMetronome(true, get().bpm);
+    set({ gridRecording: true, statusMessage: 'Recording — tap your sounds in time' });
+  },
+
+  setAiMode: async (on) => {
+    const s = get();
+    if (!on) {
+      set({ aiMode: false });
+      syncBeatLoops(set, get);
+      set({ statusMessage: 'Playing your raw beat' });
+      return;
+    }
+    set({ aiMode: true });
+    if (gridHitCount(s.grid) === 0) {
+      syncBeatLoops(set, get);
+      set({ statusMessage: 'Program a beat on the grid, then the AI builds around it' });
+      return;
+    }
+    await get().arrange();
+    if (!get().playing) get().togglePlay();
+  },
+
   setStatus: (msg) => set({ statusMessage: msg }),
 
   refreshSessions: async () => {
@@ -283,15 +406,14 @@ export const useSession = create<SessionState>((set, get) => ({
     stopAllVoices();
     for (const o of get().objects) clearSlot(o.slot);
 
+    layerCache.clear();
+
     // Push the audio back into the native engine.
     for (const [slot, pcm] of pcmBySlot) {
       loadSample(slot, pcm, 1);
     }
 
-    transport.setResolver((objectId) => {
-      const obj = get().objects.find((o) => o.id === objectId);
-      return obj ? { slot: obj.slot, gain: obj.volume, pan: obj.pan } : null;
-    });
+    transport.setResolver(resolveEvent(get));
     transport.setTempo(session.bpm, session.bars);
     transport.setLoops(session.loops);
 
@@ -531,11 +653,24 @@ export const useSession = create<SessionState>((set, get) => ({
     get().pcmBySlot.delete(obj.slot);
     set((s) => ({
       objects: s.objects.filter((o) => o.id !== id),
+      grid: removeRow(s.grid, id),
       liveEvents: s.liveEvents.filter((e) => e.objectId !== id),
       loops: s.loops.map((l) => ({
         ...l,
         events: l.events.filter((e) => e.objectId !== id),
       })),
+    }));
+  },
+
+  moveObject: (id, x, y) => {
+    const cx = Math.min(1, Math.max(0, x));
+    const cy = Math.min(1, Math.max(0, y));
+    set((s) => ({
+      objects: s.objects.map((o) =>
+        o.id === id
+          ? { ...o, position: { x: cx, y: cy }, pan: Math.min(0.9, Math.max(0.1, cx)) }
+          : o,
+      ),
     }));
   },
 
@@ -589,6 +724,14 @@ export const useSession = create<SessionState>((set, get) => ({
 
     trigger(obj.slot, obj.volume, obj.pan);
 
+    // Grid recording: the tap lands on the nearest step of the user's beat.
+    if (state.gridRecording && state.playing) {
+      const step = beatToStep(transport.tapToBeat(), state.grid.steps);
+      set({ grid: setStep(state.grid, id, step, true) });
+      afterGridEdit(set, get);
+      return;
+    }
+
     // When armed, a tap is also a performance being recorded onto the grid.
     if (state.armed && state.playing) {
       const beat = transport.tapToBeat();
@@ -623,8 +766,10 @@ export const useSession = create<SessionState>((set, get) => ({
       set({ statusMessage: `Gemma is arranging… ${secs}s` });
     }, 1000);
 
-    // Tempo hint from whatever the user has actually played so far.
-    const bpmHint = state.liveEvents.length >= 3 ? state.bpm : null;
+    // Tempo hint from whatever the user has actually played so far, or from
+    // the tempo their grid beat was programmed at.
+    const bpmHint =
+      state.liveEvents.length >= 3 || gridHitCount(state.grid) > 0 ? state.bpm : null;
 
     const result = await generatePlan(
       {
@@ -635,6 +780,7 @@ export const useSession = create<SessionState>((set, get) => ({
         mood: undefined,
         melodyDescription: state.melodyDescription ?? undefined,
         reference: state.reference ?? undefined,
+        userBeat: gridToPattern(state.grid, state.objects),
       },
       instruction,
     );
@@ -651,7 +797,9 @@ export const useSession = create<SessionState>((set, get) => ({
     set({
       arranging: false,
       lastPlanInfo: info,
-      statusMessage: `${result.plan.style} · ${result.plan.bpm} BPM`,
+      statusMessage: `${result.usedFallback ? 'Rule-based' : 'Gemma arranged'} ${
+        result.plan.style
+      } · ${describeFeel(result.plan.style, get().bpm, get().bars)}`,
     });
   },
 
@@ -699,15 +847,11 @@ export const useSession = create<SessionState>((set, get) => ({
     if (state.playing) {
       transport.stop();
       setMetronome(false, state.bpm);
-      set({ playing: false });
+      set({ playing: false, gridRecording: false });
       return;
     }
 
-    transport.setResolver((objectId) => {
-      const obj = get().objects.find((o) => o.id === objectId);
-      if (!obj) return null;
-      return { slot: obj.slot, gain: obj.volume, pan: obj.pan };
-    });
+    transport.setResolver(resolveEvent(get));
     transport.setTempo(state.bpm, state.bars);
     transport.setLoops(state.loops);
     transport.start();
@@ -788,6 +932,11 @@ export const useSession = create<SessionState>((set, get) => ({
     set({
       loops: [],
       plan: null,
+      producerPlan: null,
+      aiMode: false,
+      gridRecording: false,
+      textureStatus: 'idle',
+      textureInfo: null,
       lyrics: null,
       liveEvents: [],
       playing: false,
@@ -916,22 +1065,58 @@ function upsertLoop(loops: Loop[], loop: Loop): Loop[] {
  * accompaniment layers to PCM and loads them into their reserved slots.
  */
 function applyPlan(
-  plan: ArrangementPlan,
+  rawPlan: ArrangementPlan,
   set: (partial: Partial<SessionState>) => void,
   get: () => SessionState,
 ): void {
   const state = get();
 
+  /*
+   * The director's pass over whatever arranged this — Gemma or the rules.
+   *
+   * Tempo is folded into the genre's range (a model's EDM at 64 BPM meant the
+   * half-time feel, so it becomes 128, not a dirge). And a song is at least
+   * eight bars: four is too short for the intro → verse → build → chorus form
+   * to play out, so short plans came back sounding like a single loop.
+   */
+  // The user's own grid beat, when there is one, is laid in on top of the
+  // producer's plan: their rows play exactly as programmed, the producer owns
+  // everything else. See audio/beatGrid.ts.
+  const userBeat = gridToPattern(state.grid, state.objects);
+  const layered = userBeat.length ? layerUserBeat(rawPlan, userBeat) : rawPlan;
+  const fixedLabels = new Set(userBeat.map((u) => u.object.toLowerCase()));
+  const fixedIds = new Set(
+    state.objects.filter((o) => fixedLabels.has(o.label.toLowerCase())).map((o) => o.id),
+  );
+
+  const plan: ArrangementPlan = {
+    ...layered,
+    bpm: directTempo(rawPlan.style, state.objects, rawPlan.bpm),
+    bars: Math.max(8, rawPlan.bars),
+  };
+
   // The arrangement is rendered across the whole form rather than repeating
   // one bar: sections thin parts out, accent the downbeats and put a fill on
   // each turnaround. Repeating a single bar at a flat velocity is what made a
   // jam sound like a loop instead of a piece of music.
-  const objectEvents = renderArrangement({
-    objects: state.objects,
-    objectPattern: plan.objectPattern,
-    totalBars: plan.bars,
-    style: plan.style,
-  });
+  // Grid first, then feel: swing, humanisation, and breathing room for
+  // objects that ring. See audio/groove.ts.
+  const objectEvents = applyGroove(
+    renderArrangement({
+      objects: state.objects,
+      objectPattern: plan.objectPattern,
+      totalBars: plan.bars,
+      style: plan.style,
+      fixed: fixedLabels,
+    }),
+    {
+      style: plan.style,
+      bpm: plan.bpm,
+      objects: state.objects,
+      totalBeats: plan.bars * 4,
+      fixedIds,
+    },
+  );
 
   // Render accompaniment. Each layer becomes one long sample fired once at the
   // top of the loop, so it costs the same as a single object hit rather than
@@ -944,6 +1129,17 @@ function applyPlan(
     const slot = LAYER_SLOTS[layer];
     // 'chords' and 'pad' share a slot; rendering both would overwrite one.
     if (rendered.has(slot)) continue;
+
+    // Grid edits in AI mode re-run this on every tap. Synthesising seconds of
+    // accompaniment each time would stall the UI, and the result would be
+    // identical, so an unchanged layer is reused as it sits in the engine.
+    const cacheKey = `${layer}|${plan.bpm}|${plan.bars}|${state.key}|${plan.style}|${sr}`;
+    if (layerCache.get(slot) === cacheKey && state.pcmBySlot.has(slot)) {
+      rendered.add(slot);
+      layerEvents.push({ objectId: `layer:${layer}`, beat: 0, velocity: 1 });
+      continue;
+    }
+    layerCache.set(slot, cacheKey);
 
     const pcm = renderLayer(layer, {
       sampleRate: sr,
@@ -981,26 +1177,7 @@ function applyPlan(
 
   const loops = upsertLoop(state.loops, planLoop);
 
-  transport.setResolver((objectId) => {
-    if (objectId === 'vocal') {
-      const take = get().vocalTake;
-      // Centre-panned and slightly forward: the voice is the lead, and
-      // panning it would make it fight the objects for space.
-      return take && !take.muted ? { slot: take.slot, gain: 1.0, pan: 0.5 } : null;
-    }
-    if (objectId.startsWith('layer:')) {
-      const layer = objectId.slice(6) as keyof typeof LAYER_SLOTS;
-      const slot = LAYER_SLOTS[layer];
-      if (slot == null) return null;
-      // Duck the synthesised accompaniment when a vocal is in the mix. A
-      // phone-mic voice has far less level than a synth, and at equal gain
-      // the backing simply buries it.
-      const hasVocal = get().vocalTake != null && !get().vocalTake?.muted;
-      return { slot, gain: hasVocal ? 0.45 : 0.8, pan: 0.5 };
-    }
-    const obj = get().objects.find((o) => o.id === objectId);
-    return obj ? { slot: obj.slot, gain: obj.volume, pan: obj.pan } : null;
-  });
+  transport.setResolver(resolveEvent(get));
 
   // Rebuild the spoken call sequence for the new arrangement.
   if (isGuidanceEnabled()) {
@@ -1025,5 +1202,201 @@ function applyPlan(
       );
       return entry ? { ...o, beatPattern: entry.beats } : { ...o, beatPattern: [] };
     }),
+    producerPlan: rawPlan,
+    // An arrangement made while a beat is programmed IS the AI-produced
+    // version of that beat, so it is what plays.
+    aiMode: userBeat.length > 0 ? true : get().aiMode,
   });
+
+  syncBeatLoops(set, get);
+  void requestTexture(set, get);
+}
+
+/**
+ * Maps a scheduled event to the slot, gain and pan it plays at.
+ *
+ * One resolver for every path (arranging, play/pause, opening a saved jam).
+ * The play and open paths used to install an objects-only resolver, which
+ * silently dropped the accompaniment and the vocal after a stop and restart.
+ */
+function resolveEvent(get: () => SessionState) {
+  return (objectId: string) => {
+    const s = get();
+    if (objectId === 'vocal') {
+      const take = s.vocalTake;
+      // Centre-panned and slightly forward: the voice is the lead, and
+      // panning it would make it fight the objects for space.
+      return take && !take.muted ? { slot: take.slot, gain: 1.0, pan: 0.5 } : null;
+    }
+    const hasVocal = s.vocalTake != null && !s.vocalTake.muted;
+    if (objectId === 'texture') {
+      // Air and colour under the real sounds, never on top of them.
+      return { slot: SLOT_TEXTURE, gain: hasVocal ? 0.35 : 0.55, pan: 0.5 };
+    }
+    if (objectId.startsWith('layer:')) {
+      const layer = objectId.slice(6) as keyof typeof LAYER_SLOTS;
+      const slot = LAYER_SLOTS[layer];
+      if (slot == null) return null;
+      // Duck the synthesised accompaniment when a vocal is in the mix. A
+      // phone-mic voice has far less level than a synth, and at equal gain
+      // the backing simply buries it.
+      return { slot, gain: hasVocal ? 0.45 : 0.8, pan: 0.5 };
+    }
+    const obj = s.objects.find((o) => o.id === objectId);
+    return obj ? { slot: obj.slot, gain: obj.volume, pan: obj.pan } : null;
+  };
+}
+
+const TEXTURE_LOOP_ID = 'texture';
+/** Prompt|length of the texture currently loaded in its slot. */
+let loadedTextureKey: string | null = null;
+let textureRunning = false;
+let texturePending = false;
+
+function currentTextureKey(s: SessionState): { key: string; prompt: string; seconds: number } | null {
+  if (!s.plan) return null;
+  const prompt = buildTexturePrompt(s.plan.style, s.bpm, s.key, s.plan.texture);
+  const seconds = textureSeconds(s.bpm);
+  return { key: `${prompt}|${seconds.toFixed(3)}`, prompt, seconds };
+}
+
+/**
+ * Makes sure the texture layer matches the current arrangement.
+ *
+ * Runs in the background: the track plays straight away with the synthesised
+ * backing, and the texture fades in when Stable Audio finishes (~18 s on an
+ * iQOO 15). Only one generation runs at a time; a request that arrives
+ * meanwhile is replayed once it ends, against whatever is current by then.
+ */
+async function requestTexture(
+  set: (partial: Partial<SessionState>) => void,
+  get: () => SessionState,
+  force = false,
+): Promise<void> {
+  const s = get();
+  if (!s.textureOn || !s.plan) return;
+
+  const reason = textureUnavailableReason();
+  if (reason) {
+    set({ textureStatus: 'unavailable', textureInfo: reason });
+    return;
+  }
+
+  const want = currentTextureKey(s);
+  if (!want) return;
+  if (!force && want.key === loadedTextureKey) {
+    syncBeatLoops(set, get);
+    return;
+  }
+  if (textureRunning) {
+    texturePending = true;
+    return;
+  }
+
+  textureRunning = true;
+  set({
+    textureStatus: 'generating',
+    textureInfo: want.prompt,
+    statusMessage: 'Stable Audio is making a texture…',
+  });
+  try {
+    const seed = force ? Math.floor(Math.random() * 1_000_000) : textureSeed(want.prompt);
+    const r = await generateTextureInto(want.prompt, want.seconds, seed, SLOT_TEXTURE);
+    if (r.ok) {
+      loadedTextureKey = want.key;
+      set({
+        textureStatus: 'ready',
+        textureInfo: want.prompt,
+        statusMessage: `Texture ready in ${Math.round((r.elapsedMs ?? 0) / 1000)}s: ${want.prompt}`,
+      });
+      syncBeatLoops(set, get);
+    } else {
+      set({
+        textureStatus: 'error',
+        textureInfo: r.error ?? 'generation failed',
+        statusMessage: `Texture failed: ${r.error ?? 'unknown error'}`,
+      });
+    }
+  } finally {
+    textureRunning = false;
+    if (texturePending) {
+      texturePending = false;
+      void requestTexture(set, get);
+    }
+  }
+}
+
+/** Last parameters each accompaniment slot was rendered with. */
+const layerCache = new Map<number, string>();
+
+const GRID_LOOP_ID = 'grid';
+
+/**
+ * Decides what is audible: the raw grid beat, or the AI production of it.
+ *
+ * Both loops are kept so switching AI mode is instant in either direction —
+ * the user can A/B their beat against the produced track mid-playback.
+ */
+function syncBeatLoops(
+  set: (partial: Partial<SessionState>) => void,
+  get: () => SessionState,
+): void {
+  const s = get();
+  const hasBeat = gridHitCount(s.grid) > 0;
+  const aiAudible = s.aiMode && s.plan != null;
+
+  let loops = s.loops.filter((l) => l.id !== GRID_LOOP_ID);
+  if (hasBeat) {
+    loops = upsertLoop(loops, {
+      id: GRID_LOOP_ID,
+      name: 'Your beat',
+      events: gridToEvents(s.grid, s.objects, s.bars),
+      bars: s.bars,
+      muted: aiAudible,
+      createdAt: Date.now(),
+    });
+  }
+  loops = loops.map((l) =>
+    l.id === PLAN_LOOP_ID ? { ...l, muted: hasBeat && !s.aiMode } : l,
+  );
+
+  // The texture belongs to the produced track: it plays whenever the plan
+  // does, but only once the audio in its slot matches the current plan.
+  loops = loops.filter((l) => l.id !== TEXTURE_LOOP_ID);
+  const want = currentTextureKey(s);
+  if (s.textureOn && want && want.key === loadedTextureKey) {
+    loops = upsertLoop(loops, {
+      id: TEXTURE_LOOP_ID,
+      name: 'AI texture',
+      events: textureEvents(s.bpm, s.bars),
+      bars: s.bars,
+      muted: hasBeat && !s.aiMode,
+      createdAt: Date.now(),
+    });
+  }
+
+  transport.setLoops(loops);
+  set({ loops });
+}
+
+let remixTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** Grid changed: update the raw loop now, and the AI production shortly after. */
+function afterGridEdit(
+  set: (partial: Partial<SessionState>) => void,
+  get: () => SessionState,
+): void {
+  syncBeatLoops(set, get);
+
+  const s = get();
+  if (!s.aiMode || !s.producerPlan) return;
+
+  // Debounced so a quick run of taps re-renders once, not per tap. The model
+  // is not called again: the producer's plan is reused with the new beat.
+  if (remixTimer) clearTimeout(remixTimer);
+  remixTimer = setTimeout(() => {
+    remixTimer = null;
+    const st = get();
+    if (st.aiMode && st.producerPlan) applyPlan(st.producerPlan, set, get);
+  }, 350);
 }

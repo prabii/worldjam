@@ -1,0 +1,21 @@
+<section id="primary" data-transition="fade" style="background:#0B0D16; color:#F3F1FA; font-family:'DM Sans', Arial, sans-serif; padding:128px 128px 160px; display:flex; flex-direction:column; gap:52px">
+<div style="display:flex; flex-direction:column; gap:16px">
+<p style="font-size:26px; letter-spacing:4px; text-transform:uppercase; color:#D66BF2; font-weight:500">Many objects, one answer</p>
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif; font-size:64px; font-weight:600; line-height:1.1">Choosing the object that matters</h2>
+</div>
+<p style="font-family:'Space Grotesk', Arial, sans-serif; font-size:44px; font-weight:500; background:#141A2E; border:1px solid #2C3454; border-radius:20px; padding:32px 40px">priority = <span style="color:#9DD0FF">0.50 × confidence</span> + <span style="color:#FFB27A">0.35 × size in frame</span> + <span style="color:#E6A9F7">0.15 × closeness to centre</span></p>
+<div style="display:flex; gap:64px; align-items:flex-start">
+<table style="flex:1; font-family:'DM Sans', Arial, sans-serif; font-size:28px; color:#F3F1FA">
+<tr><th style="width:22%; text-align:left">Object</th><th style="width:20%; text-align:right">Confidence</th><th style="width:16%; text-align:right">Size</th><th style="width:18%; text-align:right">Centre</th><th style="width:24%; text-align:right">Priority</th></tr>
+<tr style="background:#1E1633"><td>Laptop</td><td>0.94</td><td>0.42</td><td>0.90</td><td>0.75 · primary</td></tr>
+<tr><td>Bottle</td><td>0.86</td><td>0.17</td><td>0.42</td><td>0.55</td></tr>
+<tr><td>Chair</td><td>0.78</td><td>0.24</td><td>0.30</td><td>0.52</td></tr>
+</table>
+<div style="width:560px; display:flex; flex-direction:column; gap:20px">
+<p style="font-size:30px; line-height:1.4">The centre term is intent: you point the phone at what you want to know about.</p>
+<p style="font-size:30px; line-height:1.4; color:#B8B5CC">Left, centre or right comes from where the object sits on screen. We never claim distance without a depth sensor.</p>
+</div>
+</div>
+<p style="position:absolute; left:128px; bottom:64px; width:1664px; font-size:24px; color:#8F8CA8">Illustrative values, not measurements. All weights and thresholds are configurable and exposed in a developer diagnostics panel.</p>
+<aside>This shows why the laptop wins over the bottle and the chair. The weights are a starting point that we tune on the device using the diagnostics panel.</aside>
+</section>

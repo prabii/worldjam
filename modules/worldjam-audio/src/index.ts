@@ -44,6 +44,25 @@ export interface WorldJamAudioNative {
   arProjectAnchors(width: number, height: number): Array<string | number>;
   /** [tx, ty, tz, qx, qy, qz, qw], or [] when not tracking. */
   arCameraPose(): number[];
+
+  // --- Stable Audio Open Small texture layer ------------------------------
+  // Present only in builds that package the generator; check before calling.
+
+  /** Null when generation can run, otherwise why not. */
+  textureUnavailableReason?(): string | null;
+  /**
+   * Generates `seconds` of audio for `prompt` on-device and loads it into
+   * `slot` as a mono sample, trimmed and faded to loop. ~18 s on an iQOO 15.
+   */
+  generateTexture?(prompt: string, seconds: number, seed: number, slot: number): Promise<TextureResult>;
+}
+
+export interface TextureResult {
+  ok: boolean;
+  elapsedMs?: number;
+  frames?: number;
+  log?: string;
+  error?: string;
 }
 
 const native = requireOptionalNativeModule<WorldJamAudioNative>('WorldJamAudio');

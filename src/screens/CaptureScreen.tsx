@@ -54,6 +54,7 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
   const finishCapture = useSession((s) => s.finishCapture);
   const playObject = useSession((s) => s.playObject);
   const removeObject = useSession((s) => s.removeObject);
+  const moveObject = useSession((s) => s.moveObject);
   const renameObject = useSession((s) => s.renameObject);
   const guidanceOn = useSession((s) => s.guidanceOn);
   const setGuidance = useSession((s) => s.setGuidance);
@@ -183,6 +184,9 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
                 containerHeight={stage.height}
                 onTrigger={playObject}
                 onLongPress={removeObject}
+                // A tracked anchor is pinned to the real object; only free
+                // labels can be dragged.
+                onMove={tracked ? undefined : moveObject}
               />
             );
           })}

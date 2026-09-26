@@ -150,3 +150,24 @@ describe('buildPrompt', () => {
     expect(buildPrompt(snapshot)).toContain('92');
   });
 });
+
+describe('buildPrompt with a programmed beat', () => {
+  const base = {
+    objects: [obj('Mug'), obj('Table')],
+    vocal: null,
+    bpmHint: null,
+    style: 'chill' as const,
+  };
+
+  it('hands the model the user beat as fixed, and asks it to build around it', () => {
+    const p = buildPrompt({ ...base, userBeat: [{ object: 'Mug', beats: [1, 3] }] });
+    expect(p).toContain('user_beat (FIXED');
+    expect(p).toContain('"object":"Mug"');
+    expect(p).toMatch(/ONLY for objects NOT in user_beat/);
+  });
+
+  it('says nothing about a beat when none was programmed', () => {
+    expect(buildPrompt(base)).not.toContain('user_beat');
+    expect(buildPrompt({ ...base, userBeat: [] })).not.toContain('user_beat');
+  });
+});

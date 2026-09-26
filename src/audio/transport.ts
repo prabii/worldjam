@@ -51,6 +51,10 @@ export class Transport {
   }
 
   setTempo(bpm: number, bars: number): void {
+    // Re-applying the same tempo must not restart: a grid edit in AI mode
+    // re-renders the plan on every tap, and each restart would jump the loop
+    // back to bar one under the user's finger.
+    if (bpm === this.bpm && bars === this.bars) return;
     const wasPlaying = this.playing;
     // Changing tempo mid-loop would misplace every already-scheduled event,
     // so restart the grid cleanly from now.

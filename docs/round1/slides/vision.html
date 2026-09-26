@@ -1,0 +1,33 @@
+<section id="vision" data-transition="fade" style="background:#141A2E; color:#F3F1FA; font-family:'DM Sans', Arial, sans-serif; padding:128px; display:flex; flex-direction:column; gap:52px">
+<div style="display:flex; flex-direction:column; gap:16px">
+<p style="font-size:26px; letter-spacing:4px; text-transform:uppercase; color:#D66BF2; font-weight:500">New layer · Phase 1 · in development</p>
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif; font-size:64px; font-weight:600; line-height:1.1">Audio-first object awareness</h2>
+</div>
+<div style="display:flex; gap:10px; align-items:center">
+<div style="flex:1; background:#0B0D16; border:1px solid #2C3454; border-radius:18px; padding:22px"><h3 style="font-size:30px; font-weight:600">Camera</h3><p style="font-size:24px; color:#B8B5CC">latest frame only</p></div>
+<x-shape kind="arrow-right" style="width:36px; height:22px; background:#4A5275"></x-shape>
+<div style="flex:1; background:#1E1633; border:2px solid #D66BF2; border-radius:18px; padding:22px"><h3 style="font-size:30px; font-weight:600">YOLO26n</h3><p style="font-size:24px; color:#B8B5CC">QNN on NPU, 10–15 fps</p></div>
+<x-shape kind="arrow-right" style="width:36px; height:22px; background:#4A5275"></x-shape>
+<div style="flex:1; background:#0B0D16; border:1px solid #2C3454; border-radius:18px; padding:22px"><h3 style="font-size:30px; font-weight:600">Filter + track</h3><p style="font-size:24px; color:#B8B5CC">≥ 0.50, stable 3 frames</p></div>
+<x-shape kind="arrow-right" style="width:36px; height:22px; background:#4A5275"></x-shape>
+<div style="flex:1; background:#0B0D16; border:1px solid #2C3454; border-radius:18px; padding:22px"><h3 style="font-size:30px; font-weight:600">Primary pick</h3><p style="font-size:24px; color:#B8B5CC">+ count, direction</p></div>
+<x-shape kind="arrow-right" style="width:36px; height:22px; background:#4A5275"></x-shape>
+<div style="flex:1; background:#0B0D16; border:1px solid #2C3454; border-radius:18px; padding:22px"><h3 style="font-size:30px; font-weight:600">Readout</h3><p style="font-size:24px; color:#B8B5CC">once per object</p></div>
+<x-shape kind="arrow-right" style="width:36px; height:22px; background:#4A5275"></x-shape>
+<div style="flex:1; background:#1E1633; border:2px solid #D66BF2; border-radius:18px; padding:22px"><h3 style="font-size:30px; font-weight:600">Offline TTS</h3><p style="font-size:24px; color:#B8B5CC">latest wins, no queue</p></div>
+</div>
+<div style="display:flex; gap:40px">
+<div style="flex:1; display:flex; flex-direction:column; gap:18px">
+<p style="font-size:24px; color:#8F8CA8; font-weight:700; letter-spacing:2px">WHAT THE USER HEARS</p>
+<p style="font-size:34px; background:#0B0D16; border-radius:18px; padding:24px 32px">“Laptop detected.”</p>
+<p style="font-size:34px; background:#0B0D16; border-radius:18px; padding:24px 32px">“Laptop on your right. Two other objects are visible.”</p>
+</div>
+<div style="flex:1; display:flex; flex-direction:column; gap:18px">
+<p style="font-size:24px; color:#8F8CA8; font-weight:700; letter-spacing:2px">RULES</p>
+<p style="font-size:30px; line-height:1.35">🔊 One big button repeats the latest readout, with no new inference.</p>
+<p style="font-size:30px; line-height:1.35">Readout toggle: off stops automatic speech, repeat still works.</p>
+<p style="font-size:30px; line-height:1.35">Works with Gemma off. Never speaks scores or IDs.</p>
+</div>
+</div>
+<aside>Everything up to the readout event runs natively in Android, not in React Native, and React Native only receives compact change events. Our earlier EfficientDet-Lite prototype did detect a laptop, but it leaked camera buffers, so Phase 1 rebuilds the frame pipeline to always use the latest frame and drop stale ones. We will not call it fully accessible until blind and low-vision users have tested it.</aside>
+</section>
