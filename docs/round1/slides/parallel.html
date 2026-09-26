@@ -1,0 +1,24 @@
+<section id="parallel" data-transition="fade" style="background:#141A2E; color:#F3F1FA; font-family:'DM Sans', Arial, sans-serif; padding:128px; display:flex; flex-direction:column; gap:52px">
+<div style="display:flex; flex-direction:column; gap:16px">
+<p style="font-size:26px; letter-spacing:4px; text-transform:uppercase; color:#5AB0FF; font-weight:500">How we build</p>
+<h2 style="font-family:'Space Grotesk', Arial, sans-serif; font-size:64px; font-weight:600; line-height:1.1">Two teams, one app, no collisions</h2>
+</div>
+<div style="display:flex; gap:32px">
+<div style="flex:1; display:flex; flex-direction:column; gap:16px; background:#0B0D16; border:2px solid #5AB0FF; border-radius:24px; padding:40px">
+<p style="font-size:24px; color:#9DD0FF; font-weight:700; letter-spacing:2px">MASTER · MUSIC</p>
+<h3 style="font-family:'Space Grotesk', Arial, sans-serif; font-size:38px; font-weight:600">Capture, grid, AI Producer, texture</h3>
+<p style="font-size:28px; line-height:1.4; color:#B8B5CC">Music files are protected. The vision work never edits them.</p>
+</div>
+<div style="flex:1; display:flex; flex-direction:column; gap:16px; background:#0B0D16; border:2px dashed #D66BF2; border-radius:24px; padding:40px">
+<p style="font-size:24px; color:#E6A9F7; font-weight:700; letter-spacing:2px">FEAT/WORLDJAM-VISION-READOUT</p>
+<h3 style="font-family:'Space Grotesk', Arial, sans-serif; font-size:38px; font-weight:600">Detection, tracking, readout, TTS</h3>
+<p style="font-size:28px; line-height:1.4; color:#B8B5CC">Separate git worktree, new files only, atomic commits.</p>
+</div>
+</div>
+<div style="display:flex; flex-direction:column; gap:14px; background:#0B0D16; border:1px solid #2C3454; border-radius:24px; padding:36px 40px">
+<p style="font-size:24px; color:#8F8CA8; font-weight:700; letter-spacing:2px">THE CONTRACT BETWEEN THEM</p>
+<p style="font-family:'Space Grotesk', Arial, sans-serif; font-size:34px">VisionEvent { trackId, label, bbox, center, timestamp }</p>
+<p style="font-size:28px; line-height:1.4; color:#B8B5CC">Next phase: object → its captured sound → instrument → AR tile. Vision never imports music code.</p>
+</div>
+<aside>This is how we keep shipping music features while the vision layer is built. The only coupling is a small, serialisable event, which also keeps the door open for multiplayer and a voice agent later.</aside>
+</section>
