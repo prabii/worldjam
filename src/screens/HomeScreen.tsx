@@ -415,7 +415,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  captureBg: { ...StyleSheet.absoluteFillObject, width: '100%', height: '100%' },
+  captureBg: StyleSheet.absoluteFillObject,
   captureInner: { flex: 1, padding: spacing.lg, justifyContent: 'space-between' },
   captureTitle: { ...type.title, fontSize: 18, lineHeight: 24, color: '#FFFFFF' },
 

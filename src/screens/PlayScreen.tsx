@@ -13,7 +13,9 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LinearGradient } from 'expo-linear-gradient';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useCameraPermissions } from 'expo-camera';
+import { FootCamera } from '@/components/FootCamera';
+import type { FootReading, FootSignature, Lane } from '@/vision/footTracker';
 import * as Haptics from 'expo-haptics';
 import * as FileSystem from 'expo-file-system';
 import { useSession } from '@/state/sessionStore';
@@ -29,19 +31,23 @@ interface Props {
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const LANE_COUNT = 3;
 const TILE_H = 86;
-/** Height of the AR floor pads at the bottom — big enough for a foot. */
+/** Visual height of the lit pad at the bottom of each lane. */
 const PAD_H = 190;
 /**
- * How far above the pad top a tile still counts as a hit.
- * A foot is coarse and slow, so this is deliberately generous.
+ * Timing windows, in milliseconds either side of the beat.
+ *
+ * A foot is heavier and slower to place than a thumb, and the player is
+ * looking down at the floor rather than holding the phone at reading
+ * distance, so these are roughly triple a hand-played rhythm game's.
  */
-const HIT_ABOVE = 170;
-/** How far past the pad top a late tile still counts. */
-const HIT_BELOW = 120;
+const EARLY_MS = 420;
+const LATE_MS = 320;
+const PERFECT_MS = 150;
+const GOOD_MS = 300;
 const LEADERBOARD_PATH = `${FileSystem.documentDirectory}worldjam-leaderboard.json`;
 
 type BeatSource = 'grid' | 'jam' | 'ai';
-type Step = 'name' | 'source' | 'ready' | 'playing' | 'over';
+type Step = 'name' | 'source' | 'calibrate' | 'ready' | 'playing' | 'over';
 
 interface BeatHit {
   objectId: string;
@@ -112,6 +118,10 @@ export function PlayScreen({ onBack }: Props) {
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [arOn, setArOn] = useState(false);
+
+  const [footSig, setFootSig] = useState<FootSignature | null>(null);
+  const [capturing, setCapturing] = useState(false);
+  const [footReading, setFootReading] = useState<FootReading | null>(null);
 
   const [step, setStep] = useState<Step>('name');
   const [playerName, setPlayerName] = useState('');
@@ -295,7 +305,7 @@ export function PlayScreen({ onBack }: Props) {
     tilesRef.current = tilesRef.current.filter((t) => {
       if (t.hit) return false;
       const late = now - t.dueAt;
-      if (late > HIT_BELOW + PAD_H) {
+      if (late > LATE_MS) {
         if (!t.missed) missedThisFrame++;
         return false;
       }
@@ -368,23 +378,26 @@ export function PlayScreen({ onBack }: Props) {
       for (const t of tilesRef.current) {
         if (t.lane !== lane || t.hit) continue;
         const off = now - t.dueAt; // negative = early, positive = late
-        const px = (Math.abs(off) / travelMs) * (padTop + TILE_H);
-        if (off < 0 ? px > HIT_ABOVE : px > HIT_BELOW) continue;
+        if (off < -EARLY_MS || off > LATE_MS) continue;
         if (Math.abs(off) < bestOff) {
           bestOff = Math.abs(off);
           best = t;
         }
       }
 
-      if (!best) return;
+      // A stamp with nothing in range still sounds the lane's own sound, so
+      // the floor always answers the foot. It just does not score.
+      if (!best) {
+        const idle = laneObjects[lane];
+        if (idle) playObject(idle.id);
+        return;
+      }
 
       best.hit = true;
       const obj = laneObjects[lane];
       if (obj) playObject(obj.id);
 
-      // Timing grades are in milliseconds, not pixels — a foot is slow, so
-      // the windows are wide compared with a thumb-played rhythm game.
-      const kind = bestOff < 140 ? 'PERFECT' : bestOff < 300 ? 'GOOD' : 'OK';
+      const kind = bestOff < PERFECT_MS ? 'PERFECT' : bestOff < GOOD_MS ? 'GOOD' : 'OK';
       const points = kind === 'PERFECT' ? 30 : kind === 'GOOD' ? 20 : 10;
 
       setPadFlash({ lane, kind });
@@ -399,7 +412,7 @@ export function PlayScreen({ onBack }: Props) {
       setScore(scoreRef.current);
       setCombo(comboRef.current);
     },
-    [step, travelMs, padTop, laneObjects, playObject],
+    [step, laneObjects, playObject],
   );
 
   // ── Setup actions ─────────────────────────────────────────────────────────
@@ -412,6 +425,40 @@ export function PlayScreen({ onBack }: Props) {
     }
     setArOn((v) => !v);
   }, [cameraPermission, requestCameraPermission]);
+
+  /** Opens the calibration step, asking for the camera first if need be. */
+  const beginCalibration = useCallback(async () => {
+    if (!cameraPermission?.granted) {
+      const res = await requestCameraPermission();
+      if (!res.granted) return;
+    }
+    setFootSig(null);
+    setFootReading(null);
+    setArOn(true);
+    setStep('calibrate');
+  }, [cameraPermission, requestCameraPermission]);
+
+  /** Grabs whatever is inside the reticle as the foot's signature. */
+  const captureFoot = useCallback(() => {
+    setCapturing(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+  }, []);
+
+  const onCalibrated = useCallback((sig: FootSignature) => {
+    setCapturing(false);
+    setFootSig(sig);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
+  }, []);
+
+  /** A foot landing in a lane drives exactly the same path as a screen stamp. */
+  const onFootStamp = useCallback(
+    (lane: Lane) => {
+      setPressedLane(lane);
+      setTimeout(() => setPressedLane(null), 110);
+      strike(lane);
+    },
+    [strike],
+  );
 
   /** Ask Gemma for an arrangement right here, rather than sending the user away. */
   const generateAI = useCallback(async () => {
@@ -445,9 +492,21 @@ export function PlayScreen({ onBack }: Props) {
       {/* Camera is the world. When AR is off we fall back to a dark stage. */}
       {arOn && cameraPermission?.granted ? (
         <View style={StyleSheet.absoluteFill}>
-          <CameraView style={StyleSheet.absoluteFill} facing="back" />
+          <FootCamera
+            signature={footSig}
+            capturing={capturing}
+            onCalibrated={onCalibrated}
+            onStamp={onFootStamp}
+            onReading={setFootReading}
+          />
           <LinearGradient
-            colors={['rgba(2,2,6,0.72)', 'rgba(2,2,6,0.25)', 'rgba(2,2,6,0.82)']}
+            // Lighter while calibrating: the player has to see their own shoe
+            // clearly enough to line it up in the reticle.
+            colors={
+              step === 'calibrate'
+                ? ['rgba(2,2,6,0.28)', 'rgba(2,2,6,0.05)', 'rgba(2,2,6,0.42)']
+                : ['rgba(2,2,6,0.72)', 'rgba(2,2,6,0.25)', 'rgba(2,2,6,0.82)']
+            }
             style={StyleSheet.absoluteFill}
             pointerEvents="none"
           />
@@ -642,6 +701,89 @@ export function PlayScreen({ onBack }: Props) {
         </ScrollView>
       )}
 
+      {/* ── calibrate ────────────────────────────────────────────────────── */}
+      {step === 'calibrate' && (
+        <View style={styles.calRoot} pointerEvents="box-none">
+          <Text style={styles.calTitle}>
+            {footSig ? 'Got it — try moving your foot' : 'Point at your foot'}
+          </Text>
+          <Text style={styles.calSub}>
+            {footSig
+              ? 'The dot should follow your shoe. Step left, centre and right to check all three light up.'
+              : 'Fill the square with your shoe, then tap Capture. The camera will remember its colour.'}
+          </Text>
+
+          {/* The reticle the player fills with their shoe. */}
+          <View style={styles.reticle}>
+            <View style={[styles.reticleCorner, styles.rcTL]} />
+            <View style={[styles.reticleCorner, styles.rcTR]} />
+            <View style={[styles.reticleCorner, styles.rcBL]} />
+            <View style={[styles.reticleCorner, styles.rcBR]} />
+          </View>
+
+          {/* Live lane strip, so calibration quality is visible immediately. */}
+          <View style={styles.calLanes}>
+            {LANE_PALETTE.map((lp, i) => {
+              const live =
+                footSig != null &&
+                footReading != null &&
+                footReading.x != null &&
+                footReading.coverage >= 0.06 &&
+                Math.floor(Math.min(0.999, footReading.x) * 3) === i;
+              return (
+                <View
+                  key={i}
+                  style={[
+                    styles.calLane,
+                    {
+                      borderColor: live ? lp.base : `${lp.base}40`,
+                      backgroundColor: live ? lp.glow : 'transparent',
+                    },
+                  ]}
+                >
+                  <Text style={[styles.calLaneText, { color: live ? '#FFF' : lp.base }]}>
+                    {['LEFT', 'CENTRE', 'RIGHT'][i]}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+
+          {footSig && (
+            <Text style={styles.calReading}>
+              {footReading && footReading.coverage >= 0.06
+                ? `Tracking · ${Math.round(footReading.coverage * 100)}% of view`
+                : 'Foot not visible'}
+            </Text>
+          )}
+
+          <View style={styles.calButtons}>
+            <Pressable onPress={captureFoot} style={styles.primaryBtn}>
+              <LinearGradient
+                colors={gradients.brand}
+                start={{ x: 0, y: 0 }}
+                end={{ x: 1, y: 1 }}
+                style={styles.primaryInner}
+              >
+                <Text style={styles.primaryText}>
+                  {footSig ? 'Recapture' : 'Capture'}
+                </Text>
+              </LinearGradient>
+            </Pressable>
+
+            {footSig && (
+              <Pressable onPress={() => setStep('ready')} style={styles.calDone}>
+                <Text style={styles.calDoneText}>Looks good →</Text>
+              </Pressable>
+            )}
+
+            <Pressable onPress={() => setStep('ready')} style={styles.ghost}>
+              <Text style={styles.ghostText}>Back</Text>
+            </Pressable>
+          </View>
+        </View>
+      )}
+
       {/* ── ready ────────────────────────────────────────────────────────── */}
       {step === 'ready' && (
         <View style={styles.centre}>
@@ -680,25 +822,38 @@ export function PlayScreen({ onBack }: Props) {
           </View>
 
           <Text style={styles.readyHow}>
-            Put the phone on the floor, camera up.{'\n'}
-            Stamp the pad when its tile lands.{'\n'}
+            Hold the phone up so the camera sees your feet.{'\n'}
+            Tap your foot <Text style={styles.readyEm}>left</Text>,{' '}
+            <Text style={styles.readyEm}>centre</Text> or{' '}
+            <Text style={styles.readyEm}>right</Text> as each tile lands.{'\n'}
             Three misses and you&apos;re out.
           </Text>
 
-          {!arOn && (
-            <Pressable onPress={enableAR} style={styles.arPrompt}>
-              <Text style={styles.arPromptText}>📷 Turn on AR camera</Text>
+          {footSig ? (
+            <Pressable onPress={beginCalibration} style={styles.arPrompt}>
+              <Text style={[styles.arPromptText, { color: colors.live }]}>
+                👟 Foot tracking on — recalibrate
+              </Text>
+            </Pressable>
+          ) : (
+            <Pressable onPress={beginCalibration} style={styles.calCta}>
+              <Text style={styles.calCtaText}>👟 Point at your foot to start</Text>
             </Pressable>
           )}
 
-          <Pressable onPress={startGame} style={styles.primaryBtn}>
+          <Pressable
+            onPress={footSig ? startGame : beginCalibration}
+            style={styles.primaryBtn}
+          >
             <LinearGradient
-              colors={gradients.brand}
+              colors={footSig ? gradients.brand : ['#2A2A32', '#22222A']}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={styles.primaryInner}
             >
-              <Text style={styles.primaryText}>Start</Text>
+              <Text style={styles.primaryText}>
+                {footSig ? 'Start' : 'Calibrate to start'}
+              </Text>
             </LinearGradient>
           </Pressable>
           <Pressable onPress={() => setStep('source')} style={styles.ghost}>
@@ -836,60 +991,81 @@ export function PlayScreen({ onBack }: Props) {
             </View>
           )}
 
-          {/* The three floor pads. */}
-          <View style={[styles.padRow, { top: padTop, height: PAD_H + insets.bottom }]}>
+          {/* Where the tracker currently sees the foot. */}
+          {footReading && footReading.x != null && footReading.coverage >= 0.04 && (
+            <View
+              pointerEvents="none"
+              style={[
+                styles.footMarker,
+                {
+                  left: footReading.x * SCREEN_W - 26,
+                  top: (footReading.y ?? 0.5) * SCREEN_H - 26,
+                  borderColor: LANE_PALETTE[Math.floor(Math.min(0.999, footReading.x) * 3)].base,
+                  opacity: Math.min(1, 0.35 + footReading.coverage * 5),
+                },
+              ]}
+            />
+          )}
+
+          {/*
+            The three lanes, as seen through the camera.
+
+            Nothing here is touchable: the player is holding the phone up with
+            one hand and playing with their feet, so every trigger comes from
+            the tracker. These are the targets the foot is aimed at, lit by
+            whichever lane last fired.
+          */}
+          <View style={styles.laneLayer} pointerEvents="none">
             {LANE_PALETTE.map((lp, i) => {
               const down = pressedLane === i;
               return (
-                <Pressable
-                  key={i}
-                  onPressIn={() => {
-                    setPressedLane(i);
-                    strike(i);
-                  }}
-                  onPressOut={() => setPressedLane(null)}
-                  // A foot lands wide and early; reach up the runway for it.
-                  hitSlop={{ top: HIT_ABOVE, bottom: 0, left: 0, right: 0 }}
-                  android_disableSound
-                  accessibilityRole="button"
-                  accessibilityLabel={`Pad ${i + 1}, ${laneLabels[i]}`}
-                  style={[
-                    styles.pad,
-                    {
-                      borderColor: down ? lp.base : `${lp.base}44`,
-                      backgroundColor: down ? lp.glow : `${lp.base}0F`,
-                    },
-                  ]}
-                >
+                <View key={i} style={styles.laneColumn}>
                   <View
                     style={[
-                      styles.padLip,
-                      { backgroundColor: lp.base, opacity: down ? 1 : 0.45 },
+                      StyleSheet.absoluteFill,
+                      { backgroundColor: down ? lp.soft : 'transparent' },
                     ]}
                   />
-                  <View style={styles.padBody}>
+                  <View
+                    style={[
+                      styles.pad,
+                      {
+                        height: PAD_H + insets.bottom,
+                        borderColor: down ? lp.base : `${lp.base}44`,
+                        backgroundColor: down ? lp.glow : `${lp.base}0F`,
+                      },
+                    ]}
+                  >
                     <View
                       style={[
-                        styles.padRing,
-                        {
-                          borderColor: lp.base,
-                          backgroundColor: down ? `${lp.base}55` : 'transparent',
-                          transform: [{ scale: down ? 1.12 : 1 }],
-                        },
+                        styles.padLip,
+                        { backgroundColor: lp.base, opacity: down ? 1 : 0.45 },
                       ]}
-                    >
-                      <Text style={[styles.padNum, { color: down ? '#FFF' : lp.base }]}>
-                        {i + 1}
+                    />
+                    <View style={styles.padBody}>
+                      <View
+                        style={[
+                          styles.padRing,
+                          {
+                            borderColor: lp.base,
+                            backgroundColor: down ? `${lp.base}55` : 'transparent',
+                            transform: [{ scale: down ? 1.12 : 1 }],
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.padNum, { color: down ? '#FFF' : lp.base }]}>
+                          {i + 1}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[styles.padLabel, { color: down ? '#FFF' : lp.base }]}
+                        numberOfLines={1}
+                      >
+                        {laneLabels[i]}
                       </Text>
                     </View>
-                    <Text
-                      style={[styles.padLabel, { color: down ? '#FFF' : lp.base }]}
-                      numberOfLines={1}
-                    >
-                      {laneLabels[i]}
-                    </Text>
                   </View>
-                </Pressable>
+                </View>
               );
             })}
           </View>
@@ -1112,6 +1288,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 23,
   },
+  readyEm: { color: colors.text, fontWeight: '700' },
   padPreview: { flexDirection: 'row', width: '100%', gap: spacing.sm, marginVertical: spacing.sm },
   padPreviewBlock: {
     flex: 1,
@@ -1180,9 +1357,86 @@ const styles = StyleSheet.create({
   flash: { position: 'absolute', alignItems: 'center', zIndex: 18 },
   flashText: { ...type.label, fontSize: 18, fontWeight: '900', letterSpacing: 2 },
 
-  padRow: { position: 'absolute', left: 0, right: 0, flexDirection: 'row', zIndex: 25 },
-  pad: {
+  laneLayer: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', zIndex: 25 },
+  laneColumn: { flex: 1, justifyContent: 'flex-end' },
+  footMarker: {
+    position: 'absolute',
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    borderWidth: 3,
+    zIndex: 28,
+  },
+
+  // ── Calibration ───────────────────────────────────────────────────────────
+  calRoot: {
     flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing.lg,
+    paddingHorizontal: spacing.xl,
+  },
+  calTitle: { ...type.display, fontSize: 25, color: '#FFFFFF', textAlign: 'center' },
+  calSub: {
+    ...type.body,
+    color: '#FFFFFF',
+    opacity: 0.85,
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  reticle: { width: 180, height: 180 },
+  reticleCorner: {
+    position: 'absolute',
+    width: 42,
+    height: 42,
+    borderColor: colors.vibe,
+  },
+  rcTL: { top: 0, left: 0, borderTopWidth: 4, borderLeftWidth: 4, borderTopLeftRadius: 8 },
+  rcTR: { top: 0, right: 0, borderTopWidth: 4, borderRightWidth: 4, borderTopRightRadius: 8 },
+  rcBL: {
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 4,
+    borderLeftWidth: 4,
+    borderBottomLeftRadius: 8,
+  },
+  rcBR: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 4,
+    borderRightWidth: 4,
+    borderBottomRightRadius: 8,
+  },
+  calLanes: { flexDirection: 'row', gap: spacing.sm, width: '100%' },
+  calLane: {
+    flex: 1,
+    height: 52,
+    borderRadius: radius.md,
+    borderWidth: 2,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calLaneText: { ...type.caption, fontWeight: '800', fontSize: 11, letterSpacing: 1 },
+  calReading: { ...type.caption, color: '#FFFFFF', opacity: 0.8 },
+  calButtons: { width: '100%', alignItems: 'center', gap: spacing.xs },
+  calDone: {
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.md,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.live,
+  },
+  calDoneText: { ...type.label, color: colors.live },
+  calCta: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.vibe,
+    backgroundColor: 'rgba(10,132,255,0.1)',
+  },
+  calCtaText: { ...type.label, color: colors.vibe },
+  pad: {
     borderTopWidth: 2,
     borderLeftWidth: 0.5,
     borderRightWidth: 0.5,
