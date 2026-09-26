@@ -282,3 +282,69 @@ describe('playback audio is the recording, not a processed copy', () => {
     }
   });
 });
+
+describe('gate survives a noisy room', () => {
+  const SR = 48000;
+
+  /** A struck object over room noise at a given signal-to-room ratio. */
+  function hitInRoom(hitAmp: number, roomAmp: number, ring = 0.8): number[] {
+    const total = Math.floor(SR * (0.4 + ring + 0.4));
+    const onset = Math.floor(SR * 0.4);
+    const out = new Array<number>(total);
+    for (let i = 0; i < total; i++) {
+      let v = (Math.random() - 0.5) * roomAmp * 2;
+      if (i >= onset) {
+        const t = (i - onset) / SR;
+        const env = Math.exp(-t * (4 / ring));
+        v += Math.sin(2 * Math.PI * 500 * t) * hitAmp * env;
+      }
+      out[i] = v;
+    }
+    return out;
+  }
+
+  it('finds a gentle tap in a loud room', () => {
+    // This is the hackathon-hall case: the previous gate keyed only off the
+    // noise floor, returned null here, and the caller fell back to the whole
+    // raw buffer — so the "captured object" was really just room noise.
+    const pcm = hitInRoom(0.12, 0.03);
+    const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR));
+    expect(w).not.toBeNull();
+  });
+
+  it('still trims tightly when the room is quiet', () => {
+    const pcm = hitInRoom(0.6, 0.001);
+    const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR))!;
+    // Must not return the entire 1.6 s buffer.
+    expect((w.end - w.start) / SR).toBeLessThan(1.5);
+  });
+
+  it('never walks the start back to zero on continuous audio', () => {
+    // Loud throughout: the old loop never hit its break and returned start=0,
+    // handing back everything recorded before the strike.
+    const pcm = hitInRoom(0.5, 0.25);
+    const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR));
+    if (w) expect(w.end).toBeGreaterThan(w.start);
+  });
+
+  it('keeps the ring, not just the attack', () => {
+    const pcm = hitInRoom(0.5, 0.002, 1.0);
+    const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR))!;
+    expect((w.end - w.start) / SR).toBeGreaterThan(0.4);
+  });
+
+  it('returns a window inside the buffer', () => {
+    for (const [h, r] of [[0.5, 0.01], [0.1, 0.04], [0.9, 0.001]]) {
+      const pcm = hitInRoom(h, r);
+      const w = findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR));
+      if (!w) continue;
+      expect(w.start).toBeGreaterThanOrEqual(0);
+      expect(w.end).toBeLessThanOrEqual(pcm.length);
+    }
+  });
+
+  it('returns null for pure silence', () => {
+    const pcm = new Array(SR).fill(0);
+    expect(findTransientWindow(pcm, SR, estimateNoiseFloor(pcm, SR))).toBeNull();
+  });
+});

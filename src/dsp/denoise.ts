@@ -67,60 +67,81 @@ export function findTransientWindow(
   pcm: number[] | Float32Array,
   sampleRate: number,
   noiseFloor: number,
-  thresholdDb = 9,
+  thresholdDb = 4,
 ): { start: number; end: number } | null {
-  const threshold = noiseFloor * Math.pow(10, thresholdDb / 20);
   const hop = Math.max(32, Math.floor(sampleRate * 0.005)); // 5 ms
 
-  let peak = 0;
-  let peakIdx = -1;
+  // Frame energies, computed once and reused. Walking the buffer repeatedly
+  // with rms() was both slower and easy to get subtly wrong at the edges.
+  const frames: number[] = [];
   for (let i = 0; i + hop <= pcm.length; i += hop) {
-    const e = rms(pcm, i, i + hop);
-    if (e > peak) {
-      peak = e;
-      peakIdx = i;
+    frames.push(rms(pcm, i, i + hop));
+  }
+  if (frames.length === 0) return null;
+
+  let peak = 0;
+  let peakFrame = -1;
+  for (let f = 0; f < frames.length; f++) {
+    if (frames[f] > peak) {
+      peak = frames[f];
+      peakFrame = f;
     }
   }
-
-  // Nothing meaningfully louder than the room: no hit to isolate.
-  if (peakIdx < 0 || peak < threshold) return null;
-
-  // Walk back to where energy first rises above the floor.
-  let start = peakIdx;
-  for (let i = peakIdx; i >= 0; i -= hop) {
-    if (rms(pcm, i, Math.min(pcm.length, i + hop)) < threshold) {
-      start = i;
-      break;
-    }
-    start = i;
-  }
-  // 10 ms of pre-roll preserves the very front of the attack.
-  start = Math.max(0, start - Math.floor(sampleRate * 0.01));
+  if (peakFrame < 0 || peak <= 0) return null;
 
   /*
-   * Walk forward until the tail decays back into the noise.
+   * The onset gate is relative to the PEAK, not only to the room.
    *
-   * The gate here is deliberately far below the one used to FIND the hit. A
-   * struck cup or bottle rings well under the onset threshold for a long time,
-   * and that ring is most of what makes the object recognisable. Cutting at
-   * the onset threshold left roughly 80 ms — a click where a sound should be,
-   * which played back as a different, thinner object than the one recorded.
+   * Keying it purely off the noise floor meant a gentle tap in a loud room
+   * never cleared the bar: findTransientWindow returned null, the caller fell
+   * back to the entire raw buffer, and the "captured object" was really just
+   * a few seconds of hall noise. Taking the higher of a modest multiple of
+   * the floor and a fraction of the peak means a quiet hit in a loud room is
+   * still found, and a loud hit in a quiet room is still trimmed tightly.
    */
-  const tailThreshold = Math.max(noiseFloor * 1.5, threshold * 0.12);
-  let end = pcm.length;
-  let quietRun = 0;
-  // 180 ms of continuous quiet before calling the sound over, so a gap between
-  // two rings inside one hit does not truncate it.
-  const quietNeeded = Math.max(1, Math.floor((sampleRate * 0.18) / hop));
+  const floorGate = noiseFloor * Math.pow(10, thresholdDb / 20);
+  const onsetGate = Math.max(floorGate, peak * 0.18);
 
-  for (let i = peakIdx; i + hop <= pcm.length; i += hop) {
-    if (rms(pcm, i, i + hop) < tailThreshold) {
+  // Nothing stands out from the room at all — genuinely no hit here.
+  if (peak < noiseFloor * 1.6) return null;
+
+  /*
+   * Walk back to the last frame BEFORE the attack.
+   *
+   * The previous version assigned `start = i` on both branches, so it kept
+   * the quiet frame it had just rejected, and when the audio never dropped
+   * below the gate it walked all the way to zero and returned the whole
+   * recording. Here the loop only ever moves `startFrame` while frames are
+   * still part of the hit, and stops at the first quiet one.
+   */
+  let startFrame = peakFrame;
+  for (let f = peakFrame; f >= 0; f--) {
+    if (frames[f] < onsetGate) break;
+    startFrame = f;
+  }
+
+  /*
+   * Walk forward until the tail decays back into the room.
+   *
+   * The tail gate sits far below the onset gate: a struck cup or bottle rings
+   * well under the level that identified the attack, and that ring is most of
+   * what makes the object recognisable. Cutting at the onset gate leaves a
+   * click where a sound should be.
+   */
+  const tailGate = Math.max(noiseFloor * 1.2, peak * 0.02);
+  // 150 ms of continuous quiet before calling the sound over, so a gap
+  // between two rings inside one hit does not truncate it.
+  const quietNeeded = Math.max(1, Math.round(0.15 / 0.005));
+
+  let endFrame = frames.length;
+  let quietRun = 0;
+  for (let f = peakFrame; f < frames.length; f++) {
+    if (frames[f] < tailGate) {
       quietRun++;
       if (quietRun >= quietNeeded) {
-        // Back off to where the quiet run began, then keep a short release so
-        // the decay is not chopped at the moment it crosses the gate.
-        const quietStarted = i - (quietRun - 1) * hop;
-        end = Math.min(pcm.length, quietStarted + Math.floor(sampleRate * 0.06));
+        // Back off to where the quiet run began, plus a short release so the
+        // decay is not chopped the moment it crosses the gate.
+        endFrame = Math.min(frames.length, f - quietRun + 1 + Math.round(0.06 / 0.005));
         break;
       }
     } else {
@@ -128,13 +149,20 @@ export function findTransientWindow(
     }
   }
 
+  // 10 ms of pre-roll preserves the very front of the attack, which is where
+  // most of an object's character lives.
+  let start = Math.max(0, startFrame * hop - Math.floor(sampleRate * 0.01));
+  let end = Math.min(pcm.length, endFrame * hop);
+
   // Never hand back less than a quarter second when that much was recorded:
   // below that an object stops sounding like itself.
   const minLength = Math.floor(sampleRate * 0.25);
   if (end - start < minLength) {
     end = Math.min(pcm.length, start + minLength);
+    if (end - start < minLength) start = Math.max(0, end - minLength);
   }
 
+  if (end <= start) return null;
   return { start, end };
 }
 

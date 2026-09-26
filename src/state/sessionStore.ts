@@ -41,6 +41,8 @@ import {
   estimateTempo,
   extractFeatures,
   extractMelody,
+  nameFromSound,
+  normalisePeak,
   inferRole,
   trimSilence,
 } from '@/dsp/analysis';
@@ -66,6 +68,22 @@ import { colors as themeColors } from '@/theme';
 
 /** Neon accents matching the object outlines in the product mockups. */
 const OBJECT_COLORS = themeColors.objectPalette;
+
+/**
+ * Disambiguates a generated name against what is already captured.
+ *
+ * Two cups struck the same way genuinely produce the same name, and a pad
+ * grid showing "Tap, Tap, Tap" is no better than "Object, Object, Object".
+ */
+function uniqueLabel(base: string, existing: { label: string }[]): string {
+  const taken = new Set(existing.map((o) => o.label.toLowerCase()));
+  if (!taken.has(base.toLowerCase())) return base;
+  for (let n = 2; n < 50; n++) {
+    const candidate = `${base} ${n}`;
+    if (!taken.has(candidate.toLowerCase())) return candidate;
+  }
+  return base;
+}
 
 export type CaptureTarget =
   | { kind: 'object'; label: string; category: ObjectCategory; x: number; y: number }
@@ -431,7 +449,17 @@ export const useSession = create<SessionState>((set, get) => ({
      */
     const window = findTransientWindow(raw, sr, estimateNoiseFloor(raw, sr));
     const hit = window ? Array.from(raw).slice(window.start, window.end) : Array.from(raw);
-    const { pcm } = trimSilence(hit, sr);
+    const trimmed = trimSilence(hit, sr).pcm;
+
+    /*
+     * Level-match the capture.
+     *
+     * Objects get struck with very different force, so without this a soft
+     * tap is inaudible under the accompaniment while a hard one clips. The
+     * arrangement then has no audible beat even though every event is firing
+     * exactly on time. Normalising is what makes the rhythm actually land.
+     */
+    const pcm = normalisePeak(trimmed);
 
     // Denoised only for measurement.
     const analysed = cleanCapture(pcm, sr);
@@ -451,7 +479,18 @@ export const useSession = create<SessionState>((set, get) => ({
 
     const obj: WorldJamObject = {
       id: `obj-${Date.now()}-${slot}`,
-      label: target.label,
+      /*
+       * Named from the sound, not the scan.
+       *
+       * The caller passes a generic "Object" when nothing identified it, and
+       * five identical entries in a row are unusable. The recording's own
+       * brightness and decay give a name a musician can act on, so the label
+       * is only taken from the caller when it actually says something.
+       */
+      label:
+        target.label && target.label !== 'Object'
+          ? target.label
+          : uniqueLabel(nameFromSound(features), get().objects),
       category: target.category,
       slot,
       position: { x: target.x, y: target.y },

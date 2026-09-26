@@ -423,3 +423,67 @@ export function detectKey(notes: NoteEvent[]): string | null {
   }
   return best.name || null;
 }
+
+/**
+ * Brings a capture up to a usable, consistent level.
+ *
+ * Objects are struck with wildly different force — a fingernail on a glass
+ * against a palm on a table can be 30 dB apart. Left alone, the quiet ones are
+ * inaudible under the accompaniment and the loud ones clip, so an arrangement
+ * built from them has no discernible beat even when every event fires on time.
+ *
+ * Peak normalisation rather than RMS: these are short percussive hits where
+ * the transient IS the sound, and RMS matching would pump the quiet ones up
+ * until their noise floor became audible. The ceiling leaves headroom so
+ * several objects landing on the same beat do not sum past full scale.
+ *
+ * Gain is capped so a near-silent recording is not amplified into hiss — if
+ * the capture really was that quiet, it stays quiet rather than becoming loud
+ * noise.
+ */
+export function normalisePeak(
+  pcm: number[],
+  ceiling = 0.89,
+  maxGain = 8,
+): number[] {
+  let peak = 0;
+  for (let i = 0; i < pcm.length; i++) {
+    const a = Math.abs(pcm[i]);
+    if (a > peak) peak = a;
+  }
+  if (peak <= 1e-6) return pcm;
+
+  const gain = Math.min(maxGain, ceiling / peak);
+  // Already at or above the ceiling: bring it down, but never push it up past
+  // what the cap allows.
+  if (Math.abs(gain - 1) < 0.01) return pcm;
+
+  const out = new Array<number>(pcm.length);
+  for (let i = 0; i < pcm.length; i++) out[i] = pcm[i] * gain;
+  return out;
+}
+
+/**
+ * Names a capture after what it actually sounds like.
+ *
+ * Every object was showing as "Object", which tells the user nothing and
+ * makes a session of five captures unreadable. Vision-based naming was tried
+ * and removed (it crashed the camera, and it named the *thing* rather than
+ * the sound it makes — a plastic bottle struck hard and tapped softly are two
+ * different instruments).
+ *
+ * So the name comes from the recording: brightness decides the family, decay
+ * decides whether it rings or stops. These read as instrument names a
+ * musician would recognise, which is more useful on a pad than "Bottle".
+ */
+export function nameFromSound(f: AudioFeatures): string {
+  const bright = f.brightness;
+  const rings = f.decay > 0.8;
+  const tight = f.decay < 0.2;
+
+  if (bright > 3500) return tight ? 'Tick' : rings ? 'Shimmer' : 'Click';
+  if (bright > 2200) return tight ? 'Snap' : rings ? 'Chime' : 'Tap';
+  if (bright > 1200) return tight ? 'Knock' : rings ? 'Ring' : 'Hit';
+  if (bright > 600) return tight ? 'Thud' : rings ? 'Hum' : 'Tom';
+  return tight ? 'Kick' : rings ? 'Boom' : 'Low';
+}
