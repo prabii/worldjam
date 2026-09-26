@@ -1,0 +1,7 @@
+{
+  "name": "worldjam-media",
+  "version": "0.1.0",
+  "description": "WorldJam V2 media services: decode, video frames, waveform peaks, offline mix renderer, on-device speech recognition",
+  "main": "src/index.ts",
+  "private": true
+}
