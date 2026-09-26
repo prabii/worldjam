@@ -846,6 +846,7 @@ export const useSession = create<SessionState>((set, get) => ({
     const state = get();
     if (state.playing) {
       transport.stop();
+      stopAllVoices();
       setMetronome(false, state.bpm);
       set({ playing: false, gridRecording: false });
       return;
@@ -926,7 +927,7 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   clearTrack: () => {
-    transport.stop();
+    transport.reset();
     stopAllVoices();
     transport.setLoops([]);
     set({
@@ -1032,7 +1033,7 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   reset: () => {
-    transport.stop();
+    transport.reset();
     const current = get();
     for (const o of current.objects) clearSlot(o.slot);
     current.pcmBySlot.clear();

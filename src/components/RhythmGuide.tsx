@@ -92,7 +92,7 @@ export function RhythmGuide({ plan, objects, playing }: Props) {
       {/* The sequence, as panel 5 shows it: icon, name, count, chevron. */}
       <View style={styles.sequence}>
         {counts.map((entry, i) => (
-          <React.Fragment key={entry.object.id}>
+          <React.Fragment key={`${entry.object.id}-${i}`}>
             <View style={styles.seqItem}>
               <View style={[styles.seqIcon, { borderColor: entry.object.color }]}>
                 <ObjectIcon
@@ -122,7 +122,7 @@ export function RhythmGuide({ plan, objects, playing }: Props) {
               <Text style={[styles.beatNum, active && styles.beatNumActive]}>{i + 1}</Text>
               <View style={styles.chips}>
                 {slot.map((o, j) => (
-                  <View key={j} style={[styles.chip, { backgroundColor: o.color }]} />
+                  <View key={`${o.id}-${j}`} style={[styles.chip, { backgroundColor: o.color }]} />
                 ))}
               </View>
             </View>

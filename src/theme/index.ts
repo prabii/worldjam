@@ -1,55 +1,53 @@
 /**
  * WorldJam visual language.
  *
- * The app is used with a camera open in a room, often dim, at arm's length,
- * while the user is tapping physical objects. So: near-black surfaces that let
- * the camera feed dominate, one hot accent for anything that makes sound, and
- * touch targets big enough to hit without looking.
+ * Clean, minimal, dark. Apple-inspired spacing and typography with the
+ * WorldJam personality. Near-black surfaces let camera and waveforms dominate.
+ * Touch targets are generous for use while tapping physical objects.
  */
 
 export const colors = {
-  bg: '#08090C',
-  surface: 'rgba(20, 22, 28, 0.88)',
-  surfaceSolid: '#14161C',
-  surfaceRaised: 'rgba(32, 35, 44, 0.94)',
-  border: 'rgba(255, 255, 255, 0.10)',
-  borderStrong: 'rgba(255, 255, 255, 0.22)',
+  bg: '#000000',
+  surface: 'rgba(18, 18, 20, 0.92)',
+  surfaceSolid: '#121214',
+  surfaceRaised: 'rgba(28, 28, 32, 0.95)',
+  border: 'rgba(255, 255, 255, 0.08)',
+  borderStrong: 'rgba(255, 255, 255, 0.18)',
 
-  text: '#F4F5F7',
-  textDim: 'rgba(244, 245, 247, 0.62)',
-  textFaint: 'rgba(244, 245, 247, 0.38)',
+  text: '#F5F5F7',
+  textDim: 'rgba(245, 245, 247, 0.55)',
+  textFaint: 'rgba(245, 245, 247, 0.30)',
 
   // The signature accent — used only for live/sounding state.
-  accent: '#FF5B4A',
-  accentDim: 'rgba(255, 91, 74, 0.18)',
+  accent: '#FF453A',
+  accentDim: 'rgba(255, 69, 58, 0.15)',
 
-  live: '#34D399',
-  liveDim: 'rgba(52, 211, 153, 0.16)',
-  warn: '#FBBF24',
-  danger: '#F87171',
-  ai: '#A78BFA',
-  aiDim: 'rgba(167, 139, 250, 0.16)',
+  live: '#30D158',
+  liveDim: 'rgba(48, 209, 88, 0.12)',
+  warn: '#FFD60A',
+  danger: '#FF453A',
+  ai: '#BF5AF2',
+  aiDim: 'rgba(191, 90, 242, 0.12)',
 
-  /** The cyan the mockups use for selection and AR chrome. */
-  vibe: '#38BDF8',
-  vibeDim: 'rgba(56, 189, 248, 0.16)',
+  /** The blue accent for selection and interactive elements. */
+  vibe: '#0A84FF',
+  vibeDim: 'rgba(10, 132, 255, 0.12)',
 
   /**
-   * Per-object accents, matching the neon outlines in the mockups. Assigned in
-   * order as objects are captured, so a session looks like the panels do.
+   * Per-object accents. Assigned in order as objects are captured.
    */
   objectPalette: [
-    '#FF7A45', // mug - orange
-    '#FFC53D', // table - amber
-    '#FF4D6D', // keys - red
-    '#4DA6FF', // bottle - blue
-    '#52C41A', // plant - green
-    '#9254DE', // laptop - purple
-    '#36CFC9', // teal
-    '#F759AB', // pink
-    '#FFA940', // light orange
-    '#597EF7', // indigo
-    '#73D13D', // lime
+    '#FF9F0A', // orange
+    '#FFD60A', // yellow
+    '#FF375F', // pink
+    '#64D2FF', // cyan
+    '#30D158', // green
+    '#BF5AF2', // purple
+    '#5AC8FA', // teal
+    '#FF6482', // rose
+    '#FF9F0A', // amber
+    '#5E5CE6', // indigo
+    '#32D74B', // lime
   ] as string[],
 } as const;
 
@@ -65,18 +63,18 @@ export const spacing = {
 export const radius = {
   sm: 8,
   md: 12,
-  lg: 18,
-  xl: 26,
+  lg: 16,
+  xl: 24,
   pill: 999,
 } as const;
 
 export const type = {
-  display: { fontSize: 30, fontWeight: '800' as const, letterSpacing: -0.6 },
-  title: { fontSize: 20, fontWeight: '700' as const, letterSpacing: -0.3 },
-  body: { fontSize: 15, fontWeight: '500' as const },
+  display: { fontSize: 30, fontWeight: '700' as const, letterSpacing: -0.5 },
+  title: { fontSize: 20, fontWeight: '600' as const, letterSpacing: -0.3 },
+  body: { fontSize: 15, fontWeight: '400' as const },
   label: { fontSize: 13, fontWeight: '600' as const },
-  mono: { fontSize: 12, fontWeight: '600' as const, letterSpacing: 0.4 },
-  caption: { fontSize: 11, fontWeight: '600' as const, letterSpacing: 0.8 },
+  mono: { fontSize: 12, fontWeight: '500' as const, letterSpacing: 0.3 },
+  caption: { fontSize: 11, fontWeight: '500' as const, letterSpacing: 0.6 },
 } as const;
 
 /** Minimum touch target — these are hit while looking at a physical object. */

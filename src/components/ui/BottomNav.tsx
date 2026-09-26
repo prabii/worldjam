@@ -6,103 +6,83 @@ import * as Haptics from 'expo-haptics';
 import { gradients } from '@/theme/gradients';
 import { colors, radius, spacing, type } from '@/theme';
 
-export type NavTab = 'home' | 'studio' | 'jams' | 'profile';
+export type NavTab = 'home' | 'studio' | 'play' | 'profile';
+
+export type AppScreen = 'welcome' | 'home' | 'capture' | 'jam' | 'jams' | 'play' | 'profile';
 
 interface Props {
   active: NavTab;
   onSelect: (tab: NavTab) => void;
-  /** The centre action — starts a capture. */
   onCapture: () => void;
-  /** Tabs with nothing to show yet are rendered but not selectable. */
-  disabled?: NavTab[];
 }
 
-/**
- * Bottom navigation with the raised gradient capture button.
- *
- * Tabs that have nothing behind them yet are shown dimmed and are genuinely
- * non-interactive, rather than navigating to an empty screen. Showing a tab
- * that does nothing when tapped is worse than showing it as unavailable.
- */
-export function BottomNav({ active, onSelect, onCapture, disabled = [] }: Props) {
+export function BottomNav({ active, onSelect, onCapture }: Props) {
   const insets = useSafeAreaInsets();
 
   const tab = (key: NavTab, label: string, glyph: React.ReactNode) => {
-    const isDisabled = disabled.includes(key);
-    const isActive = active === key && !isDisabled;
+    const isActive = active === key;
 
     return (
       <Pressable
         key={key}
         onPress={() => {
-          if (isDisabled) return;
           Haptics.selectionAsync().catch(() => {});
           onSelect(key);
         }}
-        disabled={isDisabled}
         accessibilityRole="tab"
-        accessibilityState={{ selected: isActive, disabled: isDisabled }}
-        accessibilityLabel={isDisabled ? `${label}, not available yet` : label}
+        accessibilityState={{ selected: isActive }}
+        accessibilityLabel={label}
         style={styles.tab}
       >
-        <View style={[styles.glyphWrap, isDisabled && styles.dimmed]}>{glyph}</View>
-        <Text
-          style={[
-            styles.tabLabel,
-            isActive && styles.tabLabelActive,
-            isDisabled && styles.tabLabelDisabled,
-          ]}
-        >
+        <View style={styles.glyphWrap}>{glyph}</View>
+        <Text style={[styles.tabLabel, isActive && styles.tabLabelActive]}>
           {label}
         </Text>
+        {isActive && <View style={styles.activeDot} />}
       </Pressable>
     );
   };
 
-  const tint = (key: NavTab) =>
-    disabled.includes(key)
-      ? colors.textFaint
-      : active === key
-        ? colors.vibe
-        : colors.textDim;
+  const tint = (key: NavTab) => (active === key ? colors.vibe : colors.textDim);
 
   return (
-    <View style={[styles.wrap, { paddingBottom: insets.bottom + spacing.sm }]}>
+    <View style={[styles.wrap, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+      {/* Solid background that covers to the very bottom edge */}
+      <View style={[styles.bgFill, { height: insets.bottom + 80 }]} />
+
       <View style={styles.bar}>
         {tab('home', 'Home', <HomeGlyph color={tint('home')} />)}
         {tab('studio', 'Studio', <StudioGlyph color={tint('studio')} />)}
 
-        {/* Spacer for the raised capture button. */}
         <View style={styles.centreSpacer} />
 
-        {tab('jams', 'My Jams', <JamsGlyph color={tint('jams')} />)}
+        {tab('play', 'Play', <PlayGlyph color={tint('play')} />)}
         {tab('profile', 'Profile', <ProfileGlyph color={tint('profile')} />)}
       </View>
 
-      <Pressable
-        onPress={() => {
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-          onCapture();
-        }}
-        accessibilityRole="button"
-        accessibilityLabel="Capture a new sound"
-        style={[styles.capture, { bottom: insets.bottom + 26 }]}
-      >
-        <LinearGradient
-          colors={gradients.brand}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.captureInner}
+      <View style={[styles.captureWrap, { bottom: insets.bottom + 20 }]} pointerEvents="box-none">
+        <Pressable
+          onPress={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
+            onCapture();
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Capture a new sound"
         >
-          <View style={styles.plusH} />
-          <View style={styles.plusV} />
-        </LinearGradient>
-      </Pressable>
+          <LinearGradient
+            colors={gradients.brand}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 1 }}
+            style={styles.captureInner}
+          >
+            <View style={styles.plusH} />
+            <View style={styles.plusV} />
+          </LinearGradient>
+        </Pressable>
+      </View>
     </View>
   );
 }
-
-/* --- glyphs, drawn as views to avoid an icon dependency --- */
 
 function HomeGlyph({ color }: { color: string }) {
   return (
@@ -121,14 +101,17 @@ function StudioGlyph({ color }: { color: string }) {
   );
 }
 
-function JamsGlyph({ color }: { color: string }) {
+function PlayGlyph({ color }: { color: string }) {
   return (
     <View style={styles.glyph}>
-      <View style={styles.noteRow}>
-        {[7, 12, 9].map((h, i) => (
-          <View key={i} style={{ width: 3, height: h, borderRadius: 2, backgroundColor: color }} />
-        ))}
-      </View>
+      <View
+        style={[
+          styles.playTri,
+          {
+            borderLeftColor: color,
+          },
+        ]}
+      />
     </View>
   );
 }
@@ -148,47 +131,58 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.sm,
+  },
+  bgFill: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.95)',
   },
   bar: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: spacing.md,
+    paddingVertical: 10,
     borderRadius: radius.xl,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: 'rgba(14,16,22,0.96)',
+    backgroundColor: 'rgba(10,10,12,0.98)',
   },
-  tab: { flex: 1, alignItems: 'center', gap: 4 },
-  centreSpacer: { width: 76 },
+  tab: { flex: 1, alignItems: 'center', gap: 2 },
+  activeDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.vibe,
+    marginTop: 1,
+  },
+  centreSpacer: { width: 64 },
   glyphWrap: { height: 22, justifyContent: 'center' },
-  dimmed: { opacity: 0.45 },
   glyph: { width: 22, height: 22, alignItems: 'center', justifyContent: 'center' },
-  tabLabel: { ...type.caption, fontSize: 10, color: colors.textDim },
+  tabLabel: { ...type.caption, fontSize: 9, color: colors.textDim },
   tabLabelActive: { color: colors.vibe },
-  tabLabelDisabled: { color: colors.textFaint },
 
-  capture: {
+  captureWrap: {
     position: 'absolute',
-    alignSelf: 'center',
     left: 0,
     right: 0,
     alignItems: 'center',
   },
   captureInner: {
-    width: 62,
-    height: 62,
-    borderRadius: 31,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 3,
     borderColor: colors.bg,
   },
-  plusH: { width: 24, height: 3, borderRadius: 2, backgroundColor: '#FFFFFF' },
+  plusH: { width: 20, height: 2.5, borderRadius: 2, backgroundColor: '#FFFFFF' },
   plusV: {
     position: 'absolute',
-    width: 3,
-    height: 24,
+    width: 2.5,
+    height: 20,
     borderRadius: 2,
     backgroundColor: '#FFFFFF',
   },
@@ -207,7 +201,16 @@ const styles = StyleSheet.create({
   cube: { borderWidth: 1.8, borderRadius: 4, width: 19, height: 19 },
   cubeInner: { width: 9, height: 9, borderWidth: 1.5, borderRadius: 2 },
 
-  noteRow: { flexDirection: 'row', alignItems: 'flex-end', gap: 3 },
+  playTri: {
+    width: 0,
+    height: 0,
+    marginLeft: 3,
+    borderTopWidth: 8,
+    borderBottomWidth: 8,
+    borderLeftWidth: 13,
+    borderTopColor: 'transparent',
+    borderBottomColor: 'transparent',
+  },
 
   head: { width: 9, height: 9, borderRadius: 5, borderWidth: 1.8 },
   shoulders: {

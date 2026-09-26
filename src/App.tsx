@@ -6,19 +6,22 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { WelcomeScreen } from '@/screens/WelcomeScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { CaptureScreen } from '@/screens/CaptureScreen';
-import { BottomNav, type NavTab } from '@/components/ui/BottomNav';
-import { useSession } from '@/state/sessionStore';
 import { JamScreen } from '@/screens/JamScreen';
+import { JamsScreen } from '@/screens/JamsScreen';
+import { PlayScreen } from '@/screens/PlayScreen';
+import { ProfileScreen } from '@/screens/ProfileScreen';
+import { BottomNav, type AppScreen, type NavTab } from '@/components/ui/BottomNav';
+import { useSession } from '@/state/sessionStore';
 import { ToastHost } from '@/components/ui/ToastHost';
 import { VisionScreen } from '@/vision/screens/VisionScreen';
 import { nativeAvailable, startEngine, stopEngine } from '@/audio/engine';
 import { initModel, releaseModel } from '@/ai/modelLoader';
 import { colors, spacing, type } from '@/theme';
 
-type Screen = 'welcome' | 'home' | 'capture' | 'jam' | 'vision';
+/** Master's screens, plus the vision Object Guide (not a nav tab). */
+type Screen = AppScreen | 'vision';
 
 export default function App() {
-  // A demo dies if the screen sleeps mid-jam.
   useKeepAwake();
 
   const [screen, setScreen] = useState<Screen>('welcome');
@@ -30,10 +33,6 @@ export default function App() {
 
     (async () => {
       try {
-        // The native engine opens its own Oboe streams, but Android still
-        // requires the runtime RECORD_AUDIO grant. Asked for directly rather
-        // than through expo-av, which drags in expo-asset and its native
-        // module for no benefit here.
         const granted =
           Platform.OS !== 'android' ||
           (await PermissionsAndroid.request(
@@ -62,9 +61,6 @@ export default function App() {
           return;
         }
 
-        // Detached on purpose: HLD v2 §4 requires the interaction loop never
-        // wait on the model. The app is fully playable on the rule-based
-        // arranger while a 3 GB file loads, or if none is present at all.
         void initModel();
       } catch (err) {
         if (!cancelled) {
@@ -80,6 +76,22 @@ export default function App() {
     };
   }, []);
 
+  const activeTab: NavTab =
+    screen === 'home' || screen === 'jams' ? 'home' :
+    screen === 'profile' ? 'profile' :
+    screen === 'play' ? 'play' :
+    'studio';
+
+  const navSelect = (t: NavTab) => {
+    if (t === 'home') setScreen('home');
+    else if (t === 'profile') setScreen('profile');
+    else if (t === 'play') setScreen('play');
+    else setScreen('jam');
+  };
+
+  const showNav =
+    screen !== 'welcome' && screen !== 'capture' && screen !== 'play' && screen !== 'vision';
+
   return (
     <SafeAreaProvider>
       <StatusBar style="light" />
@@ -93,6 +105,7 @@ export default function App() {
           <HomeScreen
             onScan={() => setScreen('capture')}
             onCompose={() => setScreen('jam')}
+            onJams={() => setScreen('jams')}
             onOpenSession={async (id) => {
               await openSession(id);
               setScreen('jam');
@@ -102,12 +115,23 @@ export default function App() {
           <CaptureScreen onDone={() => setScreen('jam')} />
         ) : screen === 'vision' ? (
           <VisionScreen onBack={() => setScreen('home')} />
+        ) : screen === 'jams' ? (
+          <JamsScreen
+            onBack={() => setScreen('home')}
+            onOpenSession={async (id) => {
+              await openSession(id);
+              setScreen('jam');
+            }}
+            onNewJam={() => setScreen('capture')}
+          />
+        ) : screen === 'play' ? (
+          <PlayScreen onBack={() => setScreen('home')} />
+        ) : screen === 'profile' ? (
+          <ProfileScreen onBack={() => setScreen('home')} />
         ) : (
           <JamScreen onBack={() => setScreen('home')} onCapture={() => setScreen('capture')} />
         )}
 
-        {/* Nav is hidden on the welcome screen, which is a full-bleed
-            standalone moment rather than part of the tabbed app. */}
         {/* Vision (object read-out) entry. Rendered here so no music screen changes. */}
         {screen === 'home' && (
           <Pressable
@@ -121,12 +145,11 @@ export default function App() {
           </Pressable>
         )}
 
-        {screen !== 'welcome' && screen !== 'capture' && screen !== 'vision' && (
+        {showNav && (
           <BottomNav
-            active={screen === 'home' ? 'home' : 'studio'}
-            onSelect={(t) => setScreen(t === 'home' ? 'home' : 'jam')}
+            active={activeTab}
+            onSelect={navSelect}
             onCapture={() => setScreen('capture')}
-            disabled={['jams', 'profile']}
           />
         )}
 
@@ -136,8 +159,6 @@ export default function App() {
           </View>
         )}
 
-        {/* The studio reports through toasts; capture keeps its own status
-            line, which sits next to the record button where eyes already are. */}
         <ToastHost bridgeStatus={screen === 'jam'} />
       </View>
     </SafeAreaProvider>

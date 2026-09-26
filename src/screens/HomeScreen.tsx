@@ -19,6 +19,7 @@ import { colors, radius, spacing, type } from '@/theme';
 interface Props {
   onScan: () => void;
   onCompose: () => void;
+  onJams: () => void;
   onOpenSession: (id: string) => void;
 }
 
@@ -40,7 +41,7 @@ const EXPLORE = [
   { category: 'keys' as const, label: 'Keys', role: 'Clicks', color: '#FB923C' },
 ];
 
-export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
+export function HomeScreen({ onScan, onCompose, onJams, onOpenSession }: Props) {
   const insets = useSafeAreaInsets();
 
   const objects = useSession((s) => s.objects);
@@ -211,10 +212,17 @@ export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
           />
         </View>
 
-        {/* --- recent jams, only when some exist --- */}
-        {savedSessions.length > 0 && (
-          <>
-            <SectionHeader title="Recent Jams" count={savedSessions.length} />
+        {/* --- recent jams --- */}
+        <>
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>My Jams</Text>
+            {savedSessions.length > 0 && (
+              <Pressable onPress={onJams} accessibilityRole="button">
+                <Text style={styles.viewAll}>View All</Text>
+              </Pressable>
+            )}
+          </View>
+          {savedSessions.length > 0 ? (
             <View style={styles.jamList}>
               {savedSessions.slice(0, 5).map((s) => (
                 <Pressable
@@ -251,8 +259,12 @@ export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
                 </Pressable>
               ))}
             </View>
-          </>
-        )}
+          ) : (
+            <Pressable onPress={onJams} style={styles.emptyJams}>
+              <Text style={styles.emptyJamsText}>No jams yet — start creating!</Text>
+            </Pressable>
+          )}
+        </>
       </ScrollView>
     </View>
   );
@@ -351,10 +363,10 @@ const styles = StyleSheet.create({
 
   header: { flexDirection: 'row', justifyContent: 'space-between' },
   wordmark: { flexDirection: 'row', alignItems: 'flex-start' },
-  world: { ...type.display, fontSize: 32, color: '#FFFFFF' },
-  jam: { ...type.display, fontSize: 32, color: '#C77DFF' },
-  tm: { ...type.caption, fontSize: 9, color: colors.textFaint, marginTop: 4 },
-  tagline: { ...type.caption, fontSize: 9, letterSpacing: 2.4, color: colors.textDim },
+  world: { ...type.display, fontSize: 28, color: '#FFFFFF', fontWeight: '700' },
+  jam: { ...type.display, fontSize: 28, color: '#BF5AF2', fontWeight: '700' },
+  tm: { ...type.caption, fontSize: 8, color: colors.textFaint, marginTop: 4 },
+  tagline: { ...type.caption, fontSize: 9, letterSpacing: 2, color: colors.textDim },
 
   greetRow: { flexDirection: 'row' },
   greetCard: {
@@ -362,11 +374,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.md,
-    padding: spacing.md,
+    padding: 14,
     borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSolid,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surface,
   },
   avatar: {
     width: 40,
@@ -376,7 +388,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  avatarGlyph: { fontSize: 20, color: colors.textDim },
+  avatarGlyph: { fontSize: 18, color: colors.textDim },
   greetName: { ...type.label, color: colors.text },
   greetSub: { ...type.caption, color: colors.textDim },
 
@@ -456,9 +468,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 5,
     padding: spacing.md,
-    borderRadius: radius.md,
-    borderWidth: 1.5,
-    backgroundColor: colors.surfaceRaised,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    backgroundColor: colors.surfaceSolid,
   },
   soundName: { ...type.label, fontSize: 12, color: colors.text },
   soundRole: { ...type.caption, fontSize: 9, textTransform: 'capitalize' },
@@ -468,10 +480,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 7,
     padding: spacing.md,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceSolid,
   },
   exploreName: { ...type.label, fontSize: 12, color: colors.text },
   rolePill: {
@@ -488,10 +500,10 @@ const styles = StyleSheet.create({
     flex: 1,
     gap: 5,
     padding: spacing.md,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceSolid,
   },
   aiGlyph: {
     width: 32,
@@ -510,10 +522,10 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.md,
     padding: spacing.md,
-    borderRadius: radius.md,
+    borderRadius: radius.lg,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.surfaceSolid,
   },
   jamArt: {
     width: 46,
@@ -546,4 +558,14 @@ const styles = StyleSheet.create({
     borderBottomColor: 'transparent',
     borderLeftColor: colors.text,
   },
+  viewAll: { ...type.caption, color: colors.vibe },
+  emptyJams: {
+    padding: spacing.xl,
+    borderRadius: radius.lg,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.border,
+    alignItems: 'center',
+  },
+  emptyJamsText: { ...type.body, color: colors.textFaint, textAlign: 'center' },
 });
