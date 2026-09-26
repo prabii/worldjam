@@ -66,18 +66,34 @@ export function WelcomeScreen({ onStart, onHowItWorks }: Props) {
 
   return (
     <View style={styles.root}>
-      <Image
-        source={require('../../assets/splash.png')}
-        style={StyleSheet.absoluteFill}
-        resizeMode="cover"
-        accessible={false}
-      />
+      {/*
+        The artwork is a full mockup: it carries its own headline and wordmark
+        baked into the pixels. Stretched across a screen of a different shape
+        those bake-ins drift out of place and collide with the live text — on a
+        tall phone the wordmark reappeared, huge and half-cropped, behind the
+        buttons. So it is used strictly as scenery. Only the globe is wanted,
+        which sits in the upper portion, and the rest is covered.
+      */}
+      <View style={styles.artLayer} pointerEvents="none">
+        <Image
+          source={require('../../assets/splash.png')}
+          style={styles.art}
+          resizeMode="cover"
+          accessible={false}
+        />
+      </View>
 
-      {/* Gradient scrim: clear over the globe, darker behind the controls so
-          text stays readable regardless of what the artwork does there. */}
+      {/* Scrim: readable over the globe, opaque where the artwork's own
+          lettering would otherwise show through. */}
       <LinearGradient
-        colors={['rgba(5,6,10,0)', 'rgba(5,6,10,0.15)', 'rgba(5,6,10,0.78)']}
-        locations={[0, 0.55, 1]}
+        colors={[
+          'rgba(5,6,10,0.72)',
+          'rgba(5,6,10,0.06)',
+          'rgba(5,6,10,0.20)',
+          'rgba(5,6,10,0.92)',
+          '#05060A',
+        ]}
+        locations={[0, 0.16, 0.4, 0.53, 0.6]}
         style={StyleSheet.absoluteFill}
         pointerEvents="none"
       />
@@ -181,6 +197,29 @@ export function WelcomeScreen({ onStart, onHowItWorks }: Props) {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: '#05060A' },
+  /*
+   * The artwork occupies the top two-thirds only. Its lower third holds the
+   * mockup's own wordmark and buttons, which the app draws for real, so that
+   * part is simply not shown.
+   */
+  artLayer: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    height: '56%',
+    overflow: 'hidden',
+  },
+  /*
+   * Scaled and offset so the window lands on the globe alone.
+   *
+   * The mockup stacks headline, globe, an icon row and a blurb down its
+   * length, and the app renders every one of those for real. Showing any more
+   * of the source than the globe therefore prints a second, misaligned copy
+   * of the UI behind the live one. The negative top pulls the baked-in
+   * headline up out of view; the height leaves the icon row below the cut.
+   */
+  art: { width: '100%', height: '150%', marginTop: '-14%' },
   content: { flex: 1, paddingHorizontal: spacing.xl },
 
   header: { flexDirection: 'row', justifyContent: 'space-between' },
