@@ -16,6 +16,8 @@ data class NormBox(val x: Float, val y: Float, val width: Float, val height: Flo
     val right: Float get() = x + width
     val bottom: Float get() = y + height
 
+    fun contains(px: Float, py: Float): Boolean = px >= x && px <= right && py >= y && py <= bottom
+
     fun iou(other: NormBox): Float {
         val ix = maxOf(0f, minOf(right, other.right) - maxOf(x, other.x))
         val iy = maxOf(0f, minOf(bottom, other.bottom) - maxOf(y, other.y))
@@ -116,3 +118,6 @@ data class LatestReadout(
 }
 
 enum class InputLayout { NHWC, NCHW }
+
+/** GUIDE: the Object Guide screen, with automatic read-out. CAPTURE: the music capture screen — names the closest object, never speaks by itself. */
+enum class VisionMode { GUIDE, CAPTURE }

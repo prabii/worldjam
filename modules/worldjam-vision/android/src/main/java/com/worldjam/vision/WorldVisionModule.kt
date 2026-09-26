@@ -90,6 +90,7 @@ class WorldVisionModule : Module() {
                 override fun onReadout(readout: Map<String, Any?>) = emit("onReadout", readout)
                 override fun onFormatRequest(request: Map<String, Any?>) = emit("onFormatRequest", request)
                 override fun onStatus(status: Map<String, Any?>) = emit("onStatus", status)
+                override fun onCaptureTarget(target: Map<String, Any?>) = emit("onCaptureTarget", target)
             })
             s.readout.readoutEnabled = WorldVisionRuntime.readoutPreference(context)
             WorldVisionRuntime.service = s
@@ -108,7 +109,7 @@ class WorldVisionModule : Module() {
     override fun definition() = ModuleDefinition {
         Name("WorldVision")
 
-        Events("onVisionState", "onReadout", "onFormatRequest", "onStatus")
+        Events("onVisionState", "onReadout", "onFormatRequest", "onStatus", "onCaptureTarget")
 
         OnCreate {
             WorldVisionRuntime.isolateLlamaFromDsp()
@@ -188,6 +189,25 @@ class WorldVisionModule : Module() {
 
         Function("getConfig") {
             service().config.toMap()
+        }
+
+        /** "guide" (Object Guide, automatic read-out) or "capture" (music capture: closest object, silent). */
+        Function("setMode") { mode: String ->
+            service().setMode(if (mode == "capture") VisionMode.CAPTURE else VisionMode.GUIDE)
+            service().mode.name.lowercase()
+        }
+
+        /** A tapped point in normalised upright-frame coordinates; the object under it becomes the target. */
+        Function("setFocusPoint") { x: Double, y: Double ->
+            service().setFocusPoint(x.toFloat(), y.toFloat())
+        }
+
+        Function("clearFocusPoint") {
+            WorldVisionRuntime.service?.clearFocusPoint()
+        }
+
+        Function("getCaptureTarget") {
+            service().lastTarget?.toMap()
         }
 
         /** Optional external (Gemma) phrasing; off by default. */

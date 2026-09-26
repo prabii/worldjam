@@ -47,6 +47,15 @@ data class VisionConfig(
     /** Budget for an optional external (Gemma) formatter before falling back. */
     val externalFormatTimeoutMs: Long = 1200L,
 
+    /** Capture mode: how often the depth model runs. */
+    val depthIntervalMs: Long = 330L,
+    /** yolo26n-depth outputs metric depth, so a smaller value is nearer. */
+    val depthNearIsSmall: Boolean = true,
+    /** A challenger must be this much (relative) nearer to become the capture target... */
+    val closestSwitchMargin: Float = 0.12f,
+    /** ...for this many consecutive evaluations. */
+    val closestSwitchFrames: Int = 2,
+
     /** QNN HTP performance profile. Sustained keeps thermals flat on long runs. */
     val qnnPerformanceMode: String = "sustained_high_performance",
     val preferQnn: Boolean = true,
@@ -74,6 +83,10 @@ data class VisionConfig(
         "readoutCooldownMs" to readoutCooldownMs,
         "sameLabelRepeatMs" to sameLabelRepeatMs,
         "externalFormatTimeoutMs" to externalFormatTimeoutMs,
+        "depthIntervalMs" to depthIntervalMs,
+        "depthNearIsSmall" to depthNearIsSmall,
+        "closestSwitchMargin" to closestSwitchMargin,
+        "closestSwitchFrames" to closestSwitchFrames,
         "qnnPerformanceMode" to qnnPerformanceMode,
         "preferQnn" to preferQnn,
         "allowGpu" to allowGpu,
@@ -108,6 +121,10 @@ data class VisionConfig(
             readoutCooldownMs = l("readoutCooldownMs", readoutCooldownMs).coerceIn(0L, 60_000L),
             sameLabelRepeatMs = l("sameLabelRepeatMs", sameLabelRepeatMs).coerceIn(0L, 120_000L),
             externalFormatTimeoutMs = l("externalFormatTimeoutMs", externalFormatTimeoutMs).coerceIn(100L, 10_000L),
+            depthIntervalMs = l("depthIntervalMs", depthIntervalMs).coerceIn(50L, 5_000L),
+            depthNearIsSmall = b("depthNearIsSmall", depthNearIsSmall),
+            closestSwitchMargin = f("closestSwitchMargin", closestSwitchMargin).coerceIn(0f, 1f),
+            closestSwitchFrames = i("closestSwitchFrames", closestSwitchFrames).coerceIn(1, 30),
             qnnPerformanceMode = s("qnnPerformanceMode", qnnPerformanceMode),
             preferQnn = b("preferQnn", preferQnn),
             allowGpu = b("allowGpu", allowGpu),

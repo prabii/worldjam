@@ -75,11 +75,30 @@ export interface FormatRequest {
 
 export type VisionDiagnostics = Record<string, unknown>;
 
+export type VisionMode = 'guide' | 'capture';
+
+/** The object the capture screen will name the next recording after. */
+export interface CaptureTarget {
+  trackId: string | null;
+  label?: string;
+  spokenLabel?: string;
+  confidence?: number;
+  bbox?: VisionBox;
+  /** Depth-model value (metres); null when chosen without depth. */
+  depth?: number | null;
+  method?: 'tap' | 'depth' | 'size';
+  objectCount: number;
+  multipleObjectsDetected: boolean;
+  /** Spoken labels of the other visible objects, nearest first. */
+  others?: string[];
+}
+
 type Events = {
   onVisionState: (s: VisionState) => void;
   onReadout: (r: LatestReadout) => void;
   onFormatRequest: (r: FormatRequest) => void;
   onStatus: (s: VisionStatus) => void;
+  onCaptureTarget: (t: CaptureTarget) => void;
 };
 
 interface WorldVisionNative {
@@ -96,6 +115,11 @@ interface WorldVisionNative {
   resetDiagnostics(): void;
   setConfig(patch: Record<string, unknown>): Record<string, unknown>;
   getConfig(): Record<string, unknown>;
+  setMode(mode: VisionMode): VisionMode;
+  /** Normalised upright-frame point; the object under it becomes the capture target. */
+  setFocusPoint(x: number, y: number): void;
+  clearFocusPoint(): void;
+  getCaptureTarget(): CaptureTarget | null;
   setExternalFormatting(enabled: boolean): boolean;
   completeReadout(requestId: number, text: string | null): boolean;
   addListener<K extends keyof Events>(event: K, listener: Events[K]): EventSubscription;
@@ -140,6 +164,10 @@ const stub: WorldVisionNative = {
   resetDiagnostics: () => {},
   setConfig: () => ({}),
   getConfig: () => ({}),
+  setMode: (m) => m,
+  setFocusPoint: () => {},
+  clearFocusPoint: () => {},
+  getCaptureTarget: () => null,
   setExternalFormatting: () => false,
   completeReadout: () => false,
   addListener: () => noop,

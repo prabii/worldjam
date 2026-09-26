@@ -21,6 +21,10 @@ class FrameConverter(val inputSize: Int) {
     val buffer: ByteBuffer = ByteBuffer.allocateDirect(inputSize * inputSize * 3 * 4).order(ByteOrder.nativeOrder())
     private val floats = FloatArray(inputSize * inputSize * 3)
 
+    /** Second tensor in the other layout, filled only when a second model (depth) needs it. */
+    val buffer2: ByteBuffer by lazy { ByteBuffer.allocateDirect(inputSize * inputSize * 3 * 4).order(ByteOrder.nativeOrder()) }
+    private val floats2: FloatArray by lazy { FloatArray(inputSize * inputSize * 3) }
+
     private var yBytes = ByteArray(0)
     private var uBytes = ByteArray(0)
     private var vBytes = ByteArray(0)
@@ -34,7 +38,13 @@ class FrameConverter(val inputSize: Int) {
         private set
 
     /** Returns false when the image is not something we can read. */
-    fun convert(image: Image, rotationDegrees: Int, mirrored: Boolean, layout: InputLayout): Boolean {
+    fun convert(
+        image: Image,
+        rotationDegrees: Int,
+        mirrored: Boolean,
+        layout: InputLayout,
+        secondary: InputLayout? = null,
+    ): Boolean {
         if (image.format != ImageFormat.YUV_420_888 || image.planes.size < 3) return false
         val w = image.width
         val h = image.height
@@ -55,6 +65,8 @@ class FrameConverter(val inputSize: Int) {
         val yb = yBytes
         val ub = uBytes
         val vb = vBytes
+        val second = secondary != null && secondary != layout
+        val f2 = if (second) floats2 else floats
         for (p in 0 until n) {
             val yi = yIndex[p]
             var r: Float
@@ -79,15 +91,22 @@ class FrameConverter(val inputSize: Int) {
                 floats[o] = r
                 floats[o + 1] = g
                 floats[o + 2] = b
+                if (second) { f2[p] = r; f2[plane + p] = g; f2[2 * plane + p] = b }
             } else {
                 floats[p] = r
                 floats[plane + p] = g
                 floats[2 * plane + p] = b
+                if (second) { val o = p * 3; f2[o] = r; f2[o + 1] = g; f2[o + 2] = b }
             }
         }
         buffer.rewind()
         buffer.asFloatBuffer().put(floats)
         buffer.rewind()
+        if (second) {
+            buffer2.rewind()
+            buffer2.asFloatBuffer().put(f2)
+            buffer2.rewind()
+        }
         return true
     }
 
