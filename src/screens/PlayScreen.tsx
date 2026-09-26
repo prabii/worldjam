@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Pressable,
+  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -21,6 +22,7 @@ import { useSession } from '@/state/sessionStore';
 import { gridRows, gridHitCount, stepBeats } from '@/audio/beatGrid';
 import { colors, radius, spacing, type } from '@/theme';
 import { gradients } from '@/theme/gradients';
+import type { SessionSummary } from '@/state/sessionStorage';
 
 interface Props {
   onBack: () => void;
@@ -28,16 +30,21 @@ interface Props {
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const LANE_COUNT = 3;
-const TILE_H = 72;
-const HIT_TOLERANCE = 110;
+const TILE_H = 80;
+// Piano blocks at bottom — tall enough to tap with a foot
+const PIANO_H = 180;
+// Very generous hit zone for foot-tapping
+const HIT_TOLERANCE = 150;
 const LEADERBOARD_PATH = `${FileSystem.documentDirectory}worldjam-leaderboard.json`;
+
+// Beat source modes
+type BeatSource = 'grid' | 'jam' | 'ai';
 
 interface BeatHit {
   objectId: string;
   label: string;
   color: string;
-  step: number;
-  bar: number;
+  lane: number;
   beatTime: number;
 }
 
@@ -51,7 +58,6 @@ interface Tile {
   targetMs: number;
   hit: boolean;
   missed: boolean;
-  held: boolean;
 }
 
 interface LeaderboardEntry {
@@ -75,28 +81,55 @@ async function saveLeaderboard(entries: LeaderboardEntry[]): Promise<void> {
   await FileSystem.writeAsStringAsync(LEADERBOARD_PATH, JSON.stringify(sorted));
 }
 
+// LANE COLORS — vivid, distinct per lane
+const LANE_PALETTE = [
+  { base: '#0A84FF', dim: 'rgba(10,132,255,0.18)', glow: 'rgba(10,132,255,0.5)' },   // blue
+  { base: '#30D158', dim: 'rgba(48,209,88,0.18)',  glow: 'rgba(48,209,88,0.5)' },    // green
+  { base: '#FF453A', dim: 'rgba(255,69,58,0.18)',  glow: 'rgba(255,69,58,0.5)' },    // red
+];
+
 export function PlayScreen({ onBack }: Props) {
   const insets = useSafeAreaInsets();
   const objects = useSession((s) => s.objects);
   const grid = useSession((s) => s.grid);
   const bpm = useSession((s) => s.bpm);
   const bars = useSession((s) => s.bars);
+  const plan = useSession((s) => s.plan);
+  const savedSessions = useSession((s) => s.savedSessions);
+  const openSession = useSession((s) => s.openSession);
   const playObject = useSession((s) => s.playObject);
 
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
   const [arEnabled, setArEnabled] = useState(false);
 
+  // Setup flow
+  const [step, setStep] = useState<'name' | 'source' | 'ready' | 'playing' | 'over'>('name');
   const [playerName, setPlayerName] = useState('');
-  const [nameSubmitted, setNameSubmitted] = useState(false);
+  const [beatSource, setBeatSource] = useState<BeatSource>('grid');
+  const [selectedJam, setSelectedJam] = useState<SessionSummary | null>(null);
+  const [loadingJam, setLoadingJam] = useState(false);
 
+  // Game state
   const [score, setScore] = useState(0);
   const [combo, setCombo] = useState(0);
   const [maxCombo, setMaxCombo] = useState(0);
   const [misses, setMisses] = useState(0);
-  const [gameState, setGameState] = useState<'idle' | 'playing' | 'over'>('idle');
   const [tiles, setTiles] = useState<Tile[]>([]);
-  const [hitFlash, setHitFlash] = useState<{ lane: number; color: string } | null>(null);
+  const [pressedLane, setPressedLane] = useState<number | null>(null);
+  const [hitEffect, setHitEffect] = useState<{ lane: number; type: 'perfect' | 'good' | 'ok' } | null>(null);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+
+  // Lane labels — 3 objects mapped to 3 lanes
+  const laneObjects = useMemo(() => {
+    const objs = objects.slice(0, LANE_COUNT);
+    while (objs.length < LANE_COUNT) objs.push(null as any);
+    return objs;
+  }, [objects]);
+
+  const laneLabels = useMemo(
+    () => laneObjects.map((o, i) => o?.label ?? `Lane ${i + 1}`),
+    [laneObjects],
+  );
 
   const tileId = useRef(0);
   const spawnIndex = useRef(0);
@@ -105,74 +138,78 @@ export function PlayScreen({ onBack }: Props) {
   const scoreRef = useRef(0);
   const comboRef = useRef(0);
   const maxComboRef = useRef(0);
+  const missesRef = useRef(0);
 
-  const hitZoneY = SCREEN_H - insets.bottom - 200;
-  const laneW = (SCREEN_W - spacing.md * 2) / LANE_COUNT;
+  // Piano block dimensions
+  const pianoTop = SCREEN_H - insets.bottom - PIANO_H;
+  const laneW = SCREEN_W / LANE_COUNT;
+  // Tiles hit zone is just above the piano blocks
+  const hitZoneY = pianoTop - TILE_H / 2;
 
   useEffect(() => {
     void loadLeaderboard().then(setLeaderboard);
   }, []);
 
-  useEffect(() => {
-    scoreRef.current = score;
-  }, [score]);
-  useEffect(() => {
-    comboRef.current = combo;
-  }, [combo]);
-  useEffect(() => {
-    maxComboRef.current = maxCombo;
-  }, [maxCombo]);
-
   const requestAR = useCallback(async () => {
     if (!cameraPermission?.granted) {
-      const result = await requestCameraPermission();
-      if (result.granted) setArEnabled(true);
+      const res = await requestCameraPermission();
+      if (res.granted) setArEnabled(true);
     } else {
-      setArEnabled(true);
+      setArEnabled((v) => !v);
     }
   }, [cameraPermission, requestCameraPermission]);
 
-  const fallDuration = useMemo(() => {
-    const beatMs = 60000 / bpm;
-    return beatMs * 4;
-  }, [bpm]);
+  const fallDuration = useMemo(() => (60000 / bpm) * 3.5, [bpm]);
 
+  // Build beat sequence from current grid or plan
   const beatSequence = useMemo((): BeatHit[] => {
-    if (gridHitCount(grid) === 0 || objects.length === 0) return [];
-
     const hits: BeatHit[] = [];
-    const rows = gridRows(grid, objects);
-    const unit = stepBeats(grid.steps);
 
-    for (let bar = 0; bar < bars; bar++) {
-      for (const { object, row } of rows) {
-        row.forEach((on, step) => {
-          if (!on) return;
-          const beatTime = bar * 4 + step * unit;
+    if (beatSource === 'ai' && plan) {
+      // Use AI plan's objectPattern
+      plan.objectPattern.forEach((entry, idx) => {
+        const obj = objects.find((o) => o.label.toLowerCase() === entry.object.toLowerCase());
+        entry.beats.forEach((b) => {
           hits.push({
-            objectId: object.id,
-            label: object.label,
-            color: object.color,
-            step,
-            bar,
-            beatTime,
+            objectId: obj?.id ?? `ai-${idx}`,
+            label: entry.object,
+            color: obj?.color ?? LANE_PALETTE[idx % LANE_COUNT].base,
+            lane: idx % LANE_COUNT,
+            beatTime: b - 1,
           });
+        });
+      });
+    } else if (gridHitCount(grid) > 0 && objects.length > 0) {
+      // Use grid
+      const rows = gridRows(grid, objects);
+      const unit = stepBeats(grid.steps);
+      for (let bar = 0; bar < bars; bar++) {
+        rows.forEach(({ object, row }, rowIdx) => {
+          row.forEach((on, step) => {
+            if (!on) return;
+            hits.push({
+              objectId: object.id,
+              label: object.label,
+              color: object.color,
+              lane: rowIdx % LANE_COUNT,
+              beatTime: bar * 4 + step * unit,
+            });
+          });
+        });
+      }
+    } else {
+      // Fallback: simple 3-lane pattern
+      for (let beat = 0; beat < bars * 4; beat += 1) {
+        hits.push({
+          objectId: '', label: `Beat ${beat + 1}`,
+          color: LANE_PALETTE[beat % LANE_COUNT].base,
+          lane: beat % LANE_COUNT, beatTime: beat,
         });
       }
     }
 
-    hits.sort((a, b) => a.beatTime - b.beatTime);
-    return hits;
-  }, [grid, objects, bars]);
-
-  const assignLane = useCallback(
-    (hit: BeatHit, idx: number): number => {
-      const objIdx = objects.findIndex((o) => o.id === hit.objectId);
-      if (objIdx >= 0) return objIdx % LANE_COUNT;
-      return idx % LANE_COUNT;
-    },
-    [objects],
-  );
+    return hits.sort((a, b) => a.beatTime - b.beatTime);
+  }, [grid, objects, bars, plan, beatSource]);
 
   const getTileScreenY = useCallback(
     (tile: Tile) => {
@@ -195,24 +232,21 @@ export function PlayScreen({ onBack }: Props) {
 
     const y = new Animated.Value(-TILE_H);
     const id = tileId.current++;
-    const lane = assignLane(hit, idx);
     const now = Date.now();
     const timeUntilTarget = targetMs - now;
     const animDuration = timeUntilTarget + (hitZoneY / SCREEN_H) * fallDuration;
 
     const tile: Tile = {
-      id, lane,
-      label: hit.label,
-      color: hit.color,
-      y, spawnedAt: now,
-      targetMs, hit: false, missed: false, held: false,
+      id, lane: hit.lane, label: hit.label, color: hit.color,
+      y, spawnedAt: now, targetMs,
+      hit: false, missed: false,
     };
 
     setTiles((prev) => [...prev, tile]);
 
     Animated.timing(y, {
       toValue: SCREEN_H + TILE_H,
-      duration: Math.max(animDuration, 500),
+      duration: Math.max(animDuration, 600),
       easing: Easing.linear,
       useNativeDriver: true,
     }).start(() => {
@@ -220,8 +254,10 @@ export function PlayScreen({ onBack }: Props) {
         const t = prev.find((x) => x.id === id);
         if (t && !t.hit && !t.missed) {
           t.missed = true;
-          setMisses((m) => m + 1);
+          missesRef.current += 1;
+          setMisses(missesRef.current);
           setCombo(0);
+          comboRef.current = 0;
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
         }
         return prev.filter((x) => x.id !== id);
@@ -237,8 +273,8 @@ export function PlayScreen({ onBack }: Props) {
       gameStart.current + nextLoopNum * totalLoopMs + nextHit.beatTime * beatMs;
     const delay = nextTargetMs - targetMs;
 
-    spawnTimer.current = setTimeout(spawnNextTile, Math.max(delay - fallDuration * 0.7, 50));
-  }, [beatSequence, bpm, bars, assignLane, fallDuration, hitZoneY]);
+    spawnTimer.current = setTimeout(spawnNextTile, Math.max(delay - fallDuration * 0.65, 50));
+  }, [beatSequence, bpm, bars, fallDuration, hitZoneY]);
 
   const startGame = useCallback(() => {
     setScore(0);
@@ -246,70 +282,26 @@ export function PlayScreen({ onBack }: Props) {
     setMaxCombo(0);
     setMisses(0);
     setTiles([]);
-    setGameState('playing');
+    scoreRef.current = 0;
+    comboRef.current = 0;
+    maxComboRef.current = 0;
+    missesRef.current = 0;
     tileId.current = 0;
     spawnIndex.current = 0;
-    gameStart.current = Date.now() + fallDuration;
+    gameStart.current = Date.now() + fallDuration * 0.5;
+    setStep('playing');
+    setTimeout(spawnNextTile, 200);
+  }, [fallDuration, spawnNextTile]);
 
-    if (beatSequence.length > 0) {
-      setTimeout(spawnNextTile, 100);
-    } else {
-      const interval = Math.max(350, 60000 / (bpm * 2));
-      const fallback = () => {
-        const labels =
-          objects.length > 0
-            ? objects
-            : [
-                { id: '', label: 'Tap', color: colors.vibe },
-                { id: '', label: 'Beat', color: colors.ai },
-                { id: '', label: 'Drop', color: colors.live },
-              ];
-        const pick = labels[tileId.current % labels.length];
-        const lane = tileId.current % LANE_COUNT;
-        const y = new Animated.Value(-TILE_H);
-        const id = tileId.current++;
-
-        const tile: Tile = {
-          id, lane,
-          label: 'label' in pick ? pick.label : 'Tap',
-          color: 'color' in pick ? pick.color : colors.vibe,
-          y, spawnedAt: Date.now(), targetMs: Date.now() + fallDuration,
-          hit: false, missed: false, held: false,
-        };
-        setTiles((prev) => [...prev, tile]);
-        Animated.timing(y, {
-          toValue: SCREEN_H + TILE_H,
-          duration: fallDuration * 1.5,
-          easing: Easing.linear,
-          useNativeDriver: true,
-        }).start(() => {
-          setTiles((prev) => {
-            const t = prev.find((x) => x.id === id);
-            if (t && !t.hit && !t.missed) {
-              t.missed = true;
-              setMisses((m) => m + 1);
-              setCombo(0);
-            }
-            return prev.filter((x) => x.id !== id);
-          });
-        });
-
-        spawnTimer.current = setTimeout(fallback, interval);
-      };
-      spawnTimer.current = setTimeout(fallback, 500);
-    }
-  }, [bpm, beatSequence, objects, fallDuration, spawnNextTile]);
-
-  const endGame = useCallback(async (finalScore: number, finalMaxCombo: number) => {
+  const endGame = useCallback(async () => {
     if (spawnTimer.current) clearTimeout(spawnTimer.current);
-    setGameState('over');
+    setStep('over');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error).catch(() => {});
 
-    const name = playerName.trim() || 'Anonymous';
     const entry: LeaderboardEntry = {
-      name,
-      score: finalScore,
-      combo: finalMaxCombo,
+      name: playerName.trim() || 'Anonymous',
+      score: scoreRef.current,
+      combo: maxComboRef.current,
       date: new Date().toLocaleDateString(),
     };
     const existing = await loadLeaderboard();
@@ -319,20 +311,18 @@ export function PlayScreen({ onBack }: Props) {
   }, [playerName]);
 
   useEffect(() => {
-    if (misses >= 3 && gameState === 'playing') {
-      void endGame(scoreRef.current, maxComboRef.current);
+    if (missesRef.current >= 3 && step === 'playing') {
+      void endGame();
     }
-  }, [misses, gameState, endGame]);
+  }, [misses, step, endGame]);
 
-  useEffect(() => {
-    return () => {
-      if (spawnTimer.current) clearTimeout(spawnTimer.current);
-    };
-  }, []);
+  useEffect(() => () => { if (spawnTimer.current) clearTimeout(spawnTimer.current); }, []);
 
-  const handleLaneTap = useCallback(
+  // Piano block press — generous target for foot/leg
+  const handlePianoPress = useCallback(
     (lane: number) => {
-      if (gameState !== 'playing') return;
+      if (step !== 'playing') return;
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
 
       setTiles((prev) => {
         let bestTile: Tile | null = null;
@@ -350,340 +340,416 @@ export function PlayScreen({ onBack }: Props) {
 
         if (bestTile) {
           bestTile.hit = true;
-          Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
-
-          const obj = objects.find((o) => o.label === bestTile!.label);
+          const obj = laneObjects[lane];
           if (obj) playObject(obj.id);
 
-          setHitFlash({ lane, color: bestTile.color });
-          setTimeout(() => setHitFlash(null), 150);
+          const hitType = bestDist < 40 ? 'perfect' : bestDist < 80 ? 'good' : 'ok';
+          setHitEffect({ lane, type: hitType });
+          setTimeout(() => setHitEffect(null), 300);
 
-          const points = bestDist < 40 ? 20 : bestDist < 70 ? 15 : 10;
-          setScore((s) => {
-            const next = s + points * (comboRef.current + 1);
-            scoreRef.current = next;
-            return next;
-          });
-          setCombo((c) => {
-            const next = c + 1;
-            comboRef.current = next;
-            setMaxCombo((m) => {
-              const nm = Math.max(m, next);
-              maxComboRef.current = nm;
-              return nm;
-            });
-            return next;
-          });
-        }
+          const points = hitType === 'perfect' ? 30 : hitType === 'good' ? 20 : 10;
+          const newScore = scoreRef.current + points * (comboRef.current + 1);
+          scoreRef.current = newScore;
+          setScore(newScore);
 
-        return prev;
-      });
-    },
-    [gameState, getTileScreenY, hitZoneY, objects, playObject],
-  );
-
-  const handleLaneLongPress = useCallback(
-    (lane: number) => {
-      if (gameState !== 'playing') return;
-
-      setTiles((prev) => {
-        for (const t of prev) {
-          if (t.lane !== lane || t.hit || t.missed) continue;
-          const tileY = getTileScreenY(t);
-          if (Math.abs(tileY - hitZoneY) < HIT_TOLERANCE * 1.5) {
-            t.hit = true;
-            t.held = true;
-            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
-
-            const obj = objects.find((o) => o.label === t.label);
-            if (obj) playObject(obj.id);
-
-            setHitFlash({ lane, color: t.color });
-            setTimeout(() => setHitFlash(null), 300);
-
-            setScore((s) => {
-              const next = s + 30 * (comboRef.current + 1);
-              scoreRef.current = next;
-              return next;
-            });
-            setCombo((c) => {
-              const next = c + 1;
-              comboRef.current = next;
-              setMaxCombo((m) => {
-                const nm = Math.max(m, next);
-                maxComboRef.current = nm;
-                return nm;
-              });
-              return next;
-            });
-            break;
+          const newCombo = comboRef.current + 1;
+          comboRef.current = newCombo;
+          if (newCombo > maxComboRef.current) {
+            maxComboRef.current = newCombo;
+            setMaxCombo(newCombo);
           }
+          setCombo(newCombo);
         }
+
         return prev;
       });
     },
-    [gameState, getTileScreenY, hitZoneY, objects, playObject],
+    [step, getTileScreenY, hitZoneY, laneObjects, playObject],
   );
 
-  const hasBeat = gridHitCount(grid) > 0 && objects.length > 0;
+  // ─── SELECT JAM FLOW ──────────────────────────────────────────────────────
 
-  const handleNameSubmit = () => {
-    Keyboard.dismiss();
-    if (playerName.trim().length === 0) return;
-    setNameSubmitted(true);
-  };
+  const handleSelectJam = useCallback(
+    async (jam: SessionSummary) => {
+      setLoadingJam(true);
+      await openSession(jam.id);
+      setSelectedJam(jam);
+      setBeatSource('jam');
+      setLoadingJam(false);
+      setStep('ready');
+    },
+    [openSession],
+  );
 
-  // ── RENDER ──────────────────────────────────────────────────────────────────
+  // ─── RENDER ───────────────────────────────────────────────────────────────
 
-  const gameContent = (
-    <>
-      {/* Header */}
+  return (
+    <View style={styles.root}>
+      {/* AR / background */}
+      {arEnabled && cameraPermission?.granted ? (
+        <View style={StyleSheet.absoluteFill}>
+          <CameraView style={StyleSheet.absoluteFill} facing="back" />
+          <LinearGradient
+            colors={['rgba(0,0,0,0.6)', 'rgba(0,0,0,0.3)', 'rgba(0,0,0,0.7)']}
+            style={StyleSheet.absoluteFill}
+            pointerEvents="none"
+          />
+        </View>
+      ) : (
+        <LinearGradient
+          colors={['#060609', '#0C0C18', '#060609']}
+          style={StyleSheet.absoluteFill}
+          pointerEvents="none"
+        />
+      )}
+
+      {/* HEADER — always visible */}
       <View style={[styles.header, { paddingTop: insets.top + spacing.sm }]}>
-        <Pressable onPress={onBack} accessibilityRole="button" style={styles.back}>
-          <Text style={styles.backChevron}>{'‹'}</Text>
+        <Pressable onPress={onBack} style={styles.back}>
+          <Text style={styles.backChevron}>‹</Text>
           <Text style={styles.backText}>Back</Text>
         </Pressable>
         <Text style={styles.screenTitle}>AR Play Zone</Text>
-        <View style={styles.scoreWrap}>
-          <Text style={styles.scoreNum}>{score}</Text>
-        </View>
+        {step === 'playing' ? (
+          <View style={styles.scoreWrap}>
+            <Text style={styles.scoreNum}>{score}</Text>
+          </View>
+        ) : (
+          <Pressable onPress={requestAR} style={styles.arBtn}>
+            <View style={[styles.arDot, arEnabled && styles.arDotOn]} />
+            <Text style={[styles.arBtnText, arEnabled && { color: colors.live }]}>AR</Text>
+          </Pressable>
+        )}
       </View>
 
-      {/* NAME ENTRY — shown before game starts if not yet submitted */}
-      {gameState === 'idle' && !nameSubmitted && (
+      {/* ── STEP: NAME ENTRY ──────────────────────────────────────────────── */}
+      {step === 'name' && (
         <KeyboardAvoidingView
           behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-          style={styles.nameOverlay}
+          style={styles.centred}
         >
-          <View style={styles.nameCard}>
+          <View style={styles.card}>
             <LinearGradient
               colors={gradients.brand}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
-              style={styles.nameIcon}
+              style={styles.cardIcon}
             >
-              <Text style={styles.nameIconGlyph}>🎮</Text>
+              <Text style={styles.cardIconText}>🎮</Text>
             </LinearGradient>
-            <Text style={styles.nameTitle}>Enter Your Name</Text>
-            <Text style={styles.nameSub}>Your score will be saved to the leaderboard</Text>
+            <Text style={styles.cardTitle}>What's your name?</Text>
+            <Text style={styles.cardSub}>Shows on the leaderboard</Text>
             <TextInput
               style={styles.nameInput}
               value={playerName}
               onChangeText={setPlayerName}
-              placeholder="Your name..."
+              placeholder="Your name…"
               placeholderTextColor={colors.textFaint}
               maxLength={20}
               autoFocus
-              onSubmitEditing={handleNameSubmit}
               returnKeyType="done"
+              onSubmitEditing={() => {
+                Keyboard.dismiss();
+                setStep('source');
+              }}
             />
-            <Pressable onPress={handleNameSubmit} style={styles.nameBtn}>
+            <Pressable
+              onPress={() => { Keyboard.dismiss(); setStep('source'); }}
+              style={styles.primaryBtn}
+            >
               <LinearGradient
                 colors={gradients.brand}
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
-                style={styles.nameBtnInner}
+                style={styles.primaryBtnInner}
               >
-                <Text style={styles.nameBtnText}>Continue →</Text>
+                <Text style={styles.primaryBtnText}>Continue →</Text>
               </LinearGradient>
             </Pressable>
             <Pressable
-              onPress={() => { setPlayerName('Anonymous'); setNameSubmitted(true); }}
-              style={styles.skipBtn}
+              onPress={() => { setPlayerName('Anonymous'); setStep('source'); }}
+              style={styles.ghostBtn}
             >
-              <Text style={styles.skipText}>Skip</Text>
+              <Text style={styles.ghostBtnText}>Skip</Text>
             </Pressable>
           </View>
         </KeyboardAvoidingView>
       )}
 
-      {/* START SCREEN */}
-      {gameState === 'idle' && nameSubmitted && (
-        <View style={styles.startOverlay}>
+      {/* ── STEP: BEAT SOURCE PICKER ──────────────────────────────────────── */}
+      {step === 'source' && (
+        <ScrollView
+          contentContainerStyle={[styles.centred, { paddingBottom: insets.bottom + 40 }]}
+          showsVerticalScrollIndicator={false}
+        >
+          <Text style={styles.setupTitle}>Choose your beat</Text>
+          <Text style={styles.setupSub}>Hey {playerName || 'Player'} — pick what tiles fall to</Text>
+
+          {/* My Grid */}
+          <Pressable
+            onPress={() => { setBeatSource('grid'); setStep('ready'); }}
+            style={[styles.sourceCard, beatSource === 'grid' && styles.sourceCardActive]}
+          >
+            <LinearGradient
+              colors={gridHitCount(grid) > 0 ? gradients.brand : ['#1C1C1E', '#1C1C1E']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.sourceIcon}
+            >
+              <Text style={styles.sourceIconText}>⊞</Text>
+            </LinearGradient>
+            <View style={styles.sourceInfo}>
+              <Text style={styles.sourceTitle}>My Beat Grid</Text>
+              <Text style={styles.sourceSub}>
+                {gridHitCount(grid) > 0
+                  ? `${gridHitCount(grid)} hits · ${bpm} BPM`
+                  : 'No beat yet — random tiles'}
+              </Text>
+            </View>
+            {beatSource === 'grid' && <View style={styles.selectedDot} />}
+          </Pressable>
+
+          {/* AI Plan */}
+          <Pressable
+            onPress={() => { setBeatSource('ai'); setStep('ready'); }}
+            style={[styles.sourceCard, beatSource === 'ai' && styles.sourceCardActive]}
+          >
+            <LinearGradient
+              colors={plan ? ['#BF5AF2', '#7C3AED'] : ['#1C1C1E', '#1C1C1E']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.sourceIcon}
+            >
+              <Text style={styles.sourceIconText}>✦</Text>
+            </LinearGradient>
+            <View style={styles.sourceInfo}>
+              <Text style={styles.sourceTitle}>AI Generated Beat</Text>
+              <Text style={styles.sourceSub}>
+                {plan
+                  ? `Gemma · ${plan.style} · ${bpm} BPM`
+                  : 'Arrange in Studio first'}
+              </Text>
+            </View>
+            {beatSource === 'ai' && <View style={[styles.selectedDot, { backgroundColor: colors.ai }]} />}
+          </Pressable>
+
+          {/* Saved Jams */}
+          {savedSessions.length > 0 && (
+            <>
+              <Text style={styles.jamSectionLabel}>SAVED JAMS</Text>
+              {savedSessions.slice(0, 6).map((jam) => (
+                <Pressable
+                  key={jam.id}
+                  onPress={() => handleSelectJam(jam)}
+                  style={[
+                    styles.sourceCard,
+                    selectedJam?.id === jam.id && styles.sourceCardActive,
+                  ]}
+                >
+                  <LinearGradient
+                    colors={gradients.brandShort}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 1 }}
+                    style={styles.sourceIcon}
+                  >
+                    <Text style={styles.sourceIconText}>♪</Text>
+                  </LinearGradient>
+                  <View style={styles.sourceInfo}>
+                    <Text style={styles.sourceTitle} numberOfLines={1}>{jam.name}</Text>
+                    <Text style={styles.sourceSub}>
+                      {jam.objectCount} sounds · {jam.style} · {jam.bpm} BPM
+                    </Text>
+                  </View>
+                  {selectedJam?.id === jam.id && <View style={styles.selectedDot} />}
+                </Pressable>
+              ))}
+            </>
+          )}
+
+          {loadingJam && (
+            <Text style={styles.loadingText}>Loading jam…</Text>
+          )}
+        </ScrollView>
+      )}
+
+      {/* ── STEP: READY ───────────────────────────────────────────────────── */}
+      {step === 'ready' && (
+        <View style={styles.centred}>
           <LinearGradient
             colors={gradients.brand}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
-            style={styles.startIcon}
+            style={styles.readyIcon}
           >
-            <Text style={styles.startGlyph}>♪</Text>
+            <Text style={styles.readyGlyph}>♪</Text>
           </LinearGradient>
-          <Text style={styles.startTitle}>Hey, {playerName || 'Creator'}!</Text>
-          <Text style={styles.startSub}>
-            {hasBeat
-              ? `Your beat at ${bpm} BPM · ${objects.length} sound${objects.length === 1 ? '' : 's'}\nTiles fall to YOUR rhythm\nTap · Long press to hold · 3 misses = game over`
-              : 'Create a beat in Studio first!\nOr play with random tiles\nTap · Long press to hold · 3 misses = game over'}
+          <Text style={styles.readyTitle}>Ready, {playerName || 'Player'}?</Text>
+          <Text style={styles.readySub}>
+            {beatSource === 'ai' ? 'AI beat' : beatSource === 'jam' ? selectedJam?.name ?? 'Saved jam' : 'Your grid beat'} · {bpm} BPM
+          </Text>
+          <Text style={styles.readyInstructions}>
+            3 piano blocks at the bottom{'\n'}Hit them with your foot when a tile lands{'\n'}3 misses = game over
           </Text>
 
-          {/* AR toggle */}
-          <Pressable onPress={requestAR} style={styles.arToggle}>
-            <View style={[styles.arDot, arEnabled && styles.arDotOn]} />
-            <Text style={[styles.arLabel, arEnabled && { color: colors.live }]}>
-              {arEnabled ? 'AR Camera On' : 'Enable AR Camera'}
-            </Text>
-          </Pressable>
+          {/* Mini lane preview */}
+          <View style={styles.lanePreview}>
+            {Array.from({ length: LANE_COUNT }).map((_, i) => (
+              <View key={i} style={[styles.lanePreviewBlock, { backgroundColor: LANE_PALETTE[i].dim, borderColor: LANE_PALETTE[i].base }]}>
+                <Text style={[styles.lanePreviewLabel, { color: LANE_PALETTE[i].base }]}>{laneLabels[i]}</Text>
+              </View>
+            ))}
+          </View>
 
-          <Pressable onPress={startGame} style={styles.startBtn}>
+          <Pressable onPress={startGame} style={styles.primaryBtn}>
             <LinearGradient
               colors={gradients.brand}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
-              style={styles.startBtnInner}
+              style={styles.primaryBtnInner}
             >
-              <Text style={styles.startBtnText}>
-                {hasBeat ? 'Play My Beat' : 'Start Game'}
-              </Text>
+              <Text style={styles.primaryBtnText}>Start!</Text>
             </LinearGradient>
           </Pressable>
-
-          {/* Mini leaderboard on start */}
-          {leaderboard.length > 0 && (
-            <View style={styles.miniBoard}>
-              <Text style={styles.miniBoardTitle}>🏆 TOP SCORES</Text>
-              {leaderboard.slice(0, 3).map((e, i) => (
-                <View key={i} style={styles.miniBoardRow}>
-                  <Text style={styles.miniBoardRank}>#{i + 1}</Text>
-                  <Text style={styles.miniBoardName}>{e.name}</Text>
-                  <Text style={styles.miniBoardScore}>{e.score}</Text>
-                </View>
-              ))}
-            </View>
-          )}
+          <Pressable onPress={() => setStep('source')} style={styles.ghostBtn}>
+            <Text style={styles.ghostBtnText}>← Change beat</Text>
+          </Pressable>
         </View>
       )}
 
-      {/* PLAYING */}
-      {gameState === 'playing' && (
+      {/* ── STEP: PLAYING ─────────────────────────────────────────────────── */}
+      {step === 'playing' && (
         <>
           {/* HUD */}
           <View style={styles.hud}>
-            <View style={styles.hudItem}>
-              <Text style={styles.hudLabel}>COMBO</Text>
-              <Text style={[styles.hudValue, combo >= 5 && { color: colors.warn }]}>
-                {combo}x
-              </Text>
-            </View>
-            <View style={styles.hudItem}>
-              <Text style={styles.hudLabel}>BPM</Text>
-              <Text style={styles.hudValue}>{bpm}</Text>
-            </View>
-            <View style={styles.hudItem}>
+            <HudItem label="COMBO" value={`${combo}x`} highlight={combo >= 5} />
+            <HudItem label="BPM" value={String(bpm)} />
+            <View style={styles.missHud}>
               <Text style={styles.hudLabel}>MISS</Text>
               <View style={styles.missRow}>
                 {[0, 1, 2].map((i) => (
-                  <View
-                    key={i}
-                    style={[styles.missDot, i < misses && styles.missDotFilled]}
-                  />
+                  <View key={i} style={[styles.missDot, i < misses && styles.missDotFilled]} />
                 ))}
               </View>
             </View>
           </View>
 
-          {/* Lane dividers */}
-          <View style={styles.lanes} pointerEvents="none">
+          {/* Lane guide lines */}
+          <View style={StyleSheet.absoluteFill} pointerEvents="none">
             {Array.from({ length: LANE_COUNT + 1 }).map((_, i) => (
-              <View
-                key={i}
-                style={[styles.laneLine, { left: spacing.md + i * laneW }]}
-              />
+              <View key={i} style={[styles.laneLine, { left: i * laneW }]} />
             ))}
           </View>
 
-          {/* Hit zone */}
-          <View style={[styles.hitZone, { top: hitZoneY - 2 }]} pointerEvents="none">
+          {/* Hit zone line */}
+          <View
+            style={[styles.hitZoneLine, { top: hitZoneY }]}
+            pointerEvents="none"
+          >
             <LinearGradient
-              colors={['rgba(10,132,255,0)', 'rgba(10,132,255,0.2)', 'rgba(10,132,255,0)']}
-              style={styles.hitZoneGlow}
+              colors={['transparent', 'rgba(255,255,255,0.08)', 'transparent']}
+              style={StyleSheet.absoluteFill}
             />
-            <View style={styles.hitZoneLine} />
-            <Text style={styles.hitZoneLabel}>HIT</Text>
+            <View style={styles.hitZoneBar} />
           </View>
 
           {/* Falling tiles */}
-          {tiles
-            .filter((t) => !t.hit)
-            .map((t) => (
+          {tiles.filter((t) => !t.hit).map((t) => {
+            const lp = LANE_PALETTE[t.lane];
+            return (
               <Animated.View
                 key={t.id}
                 pointerEvents="none"
                 style={[
                   styles.tile,
                   {
-                    left: spacing.md + t.lane * laneW + 8,
-                    width: laneW - 16,
+                    left: t.lane * laneW + 6,
+                    width: laneW - 12,
                     transform: [{ translateY: t.y }],
-                    backgroundColor: t.missed
-                      ? 'rgba(255,69,58,0.25)'
-                      : `${t.color}CC`,
-                    borderColor: t.missed
-                      ? colors.accent
-                      : 'rgba(255,255,255,0.25)',
+                    backgroundColor: t.missed ? 'rgba(255,69,58,0.2)' : `${lp.base}22`,
+                    borderColor: t.missed ? colors.accent : lp.base,
                   },
                 ]}
               >
-                {/* Inner glow bar */}
-                <View style={[styles.tileGlow, { backgroundColor: t.missed ? 'transparent' : t.color }]} />
+                <View style={[styles.tileTopGlow, { backgroundColor: lp.base }]} />
                 <Text
-                  style={[styles.tileLabel, t.missed && { color: colors.accent }]}
+                  style={[styles.tileLabel, { color: t.missed ? colors.accent : '#FFFFFF' }]}
                   numberOfLines={1}
                 >
                   {t.missed ? '✕' : t.label}
                 </Text>
               </Animated.View>
-            ))}
+            );
+          })}
 
-          {/* Hit flash */}
-          {hitFlash && (
+          {/* Hit effect overlay per lane */}
+          {hitEffect && (
             <View
+              pointerEvents="none"
               style={[
-                styles.flashOverlay,
+                styles.hitEffect,
                 {
-                  left: spacing.md + hitFlash.lane * laneW,
+                  left: hitEffect.lane * laneW,
                   width: laneW,
-                  top: hitZoneY - 40,
-                  backgroundColor: hitFlash.color,
+                  top: hitZoneY - 60,
+                  backgroundColor: LANE_PALETTE[hitEffect.lane].glow,
                 },
               ]}
-              pointerEvents="none"
-            />
+            >
+              <Text style={styles.hitLabel}>
+                {hitEffect.type === 'perfect' ? 'PERFECT!' : hitEffect.type === 'good' ? 'GOOD' : 'OK'}
+              </Text>
+            </View>
           )}
 
-          {/* Player name badge */}
-          <View style={[styles.playerBadge, { bottom: insets.bottom + 120 }]}>
-            <Text style={styles.playerBadgeText}>{playerName || 'Player'}</Text>
-          </View>
-
-          {/* Tap zones */}
-          <View style={[styles.tapArea, { bottom: insets.bottom + 8 }]}>
-            {Array.from({ length: LANE_COUNT }).map((_, i) => (
-              <Pressable
-                key={i}
-                onPress={() => handleLaneTap(i)}
-                onLongPress={() => handleLaneLongPress(i)}
-                delayLongPress={250}
-                style={({ pressed }) => [
-                  styles.tapLane,
-                  pressed && styles.tapLanePressed,
-                ]}
-              >
-                <View style={styles.tapTarget}>
-                  <View style={styles.tapCircle} />
-                  <Text style={styles.tapText}>TAP</Text>
-                </View>
-              </Pressable>
-            ))}
+          {/* ── 3 PIANO BLOCKS ──────────────────────────────────────────── */}
+          <View style={[styles.pianoRow, { top: pianoTop, height: PIANO_H + insets.bottom }]}>
+            {Array.from({ length: LANE_COUNT }).map((_, i) => {
+              const lp = LANE_PALETTE[i];
+              const isPressed = pressedLane === i;
+              return (
+                <Pressable
+                  key={i}
+                  onPressIn={() => {
+                    setPressedLane(i);
+                    handlePianoPress(i);
+                  }}
+                  onPressOut={() => setPressedLane(null)}
+                  style={[
+                    styles.pianoBlock,
+                    {
+                      borderColor: isPressed ? lp.base : `${lp.base}55`,
+                      backgroundColor: isPressed ? `${lp.base}30` : `${lp.base}0D`,
+                    },
+                  ]}
+                >
+                  {/* Top edge glow */}
+                  <View style={[styles.pianoTopEdge, { backgroundColor: lp.base, opacity: isPressed ? 1 : 0.4 }]} />
+                  <View style={styles.pianoContent}>
+                    <View style={[styles.pianoCircle, { borderColor: lp.base, backgroundColor: isPressed ? `${lp.base}40` : 'transparent' }]}>
+                      <Text style={[styles.pianoNum, { color: lp.base }]}>{i + 1}</Text>
+                    </View>
+                    <Text style={[styles.pianoLabel, { color: isPressed ? '#FFFFFF' : lp.base }]} numberOfLines={2}>
+                      {laneLabels[i]}
+                    </Text>
+                    <Text style={[styles.pianoHint, { color: `${lp.base}80` }]}>TAP / FOOT</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
         </>
       )}
 
-      {/* GAME OVER */}
-      {gameState === 'over' && (
-        <View style={styles.startOverlay}>
+      {/* ── STEP: GAME OVER ───────────────────────────────────────────────── */}
+      {step === 'over' && (
+        <ScrollView
+          contentContainerStyle={[styles.centred, { paddingBottom: insets.bottom + 40 }]}
+          showsVerticalScrollIndicator={false}
+        >
           <Text style={styles.overTitle}>
-            {score > 500 ? '🔥 Amazing!' : score > 200 ? '🎵 Nice Beat!' : '💀 Game Over'}
+            {score > 500 ? '🔥 Insane!' : score > 200 ? '🎵 Nice!' : '💀 Game Over'}
           </Text>
-          <Text style={styles.overSub}>{playerName || 'Player'} · {misses >= 3 ? '3 misses' : 'Round complete'}</Text>
+          <Text style={styles.overSub}>{playerName || 'Player'}</Text>
 
           <View style={styles.overStats}>
             <StatBadge label="Score" value={String(score)} color={colors.vibe} />
@@ -691,17 +757,13 @@ export function PlayScreen({ onBack }: Props) {
             <StatBadge label="Misses" value={String(misses)} color={colors.accent} />
           </View>
 
-          {/* Full leaderboard */}
           {leaderboard.length > 0 && (
             <View style={styles.leaderboard}>
               <Text style={styles.lbTitle}>🏆 LEADERBOARD</Text>
               {leaderboard.map((e, i) => {
                 const isMe = e.name === (playerName || 'Anonymous') && e.score === score;
                 return (
-                  <View
-                    key={i}
-                    style={[styles.lbRow, isMe && styles.lbRowHighlight]}
-                  >
+                  <View key={i} style={[styles.lbRow, isMe && styles.lbRowMe]}>
                     <Text style={[styles.lbRank, i === 0 && { color: colors.warn }]}>
                       {i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : `#${i + 1}`}
                     </Text>
@@ -717,51 +779,29 @@ export function PlayScreen({ onBack }: Props) {
           )}
 
           <View style={styles.overButtons}>
-            <Pressable onPress={startGame} style={styles.startBtn}>
-              <LinearGradient
-                colors={gradients.brand}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.startBtnInner}
-              >
-                <Text style={styles.startBtnText}>Play Again</Text>
+            <Pressable onPress={startGame} style={styles.primaryBtn}>
+              <LinearGradient colors={gradients.brand} start={{ x: 0, y: 0 }} end={{ x: 1, y: 1 }} style={styles.primaryBtnInner}>
+                <Text style={styles.primaryBtnText}>Play Again</Text>
               </LinearGradient>
             </Pressable>
-            <Pressable onPress={onBack} style={styles.backToStudio}>
-              <Text style={styles.backToStudioText}>Back to Studio</Text>
+            <Pressable onPress={() => setStep('source')} style={styles.ghostBtn}>
+              <Text style={styles.ghostBtnText}>Change Beat</Text>
+            </Pressable>
+            <Pressable onPress={onBack} style={styles.ghostBtn}>
+              <Text style={styles.ghostBtnText}>Back to Studio</Text>
             </Pressable>
           </View>
-        </View>
+        </ScrollView>
       )}
-    </>
+    </View>
   );
+}
 
+function HudItem({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
   return (
-    <View style={styles.root}>
-      {/* AR Camera background — only when enabled and camera permission granted */}
-      {arEnabled && cameraPermission?.granted ? (
-        <View style={StyleSheet.absoluteFill}>
-          <CameraView
-            style={StyleSheet.absoluteFill}
-            facing="back"
-          />
-          {/* Dark overlay so tiles stay readable over camera feed */}
-          <LinearGradient
-            colors={['rgba(0,0,0,0.55)', 'rgba(0,0,0,0.35)', 'rgba(0,0,0,0.65)']}
-            style={StyleSheet.absoluteFill}
-            pointerEvents="none"
-          />
-        </View>
-      ) : (
-        /* Fallback: dark gradient background */
-        <LinearGradient
-          colors={['#050508', '#0A0A14', '#050508']}
-          style={StyleSheet.absoluteFill}
-          pointerEvents="none"
-        />
-      )}
-
-      {gameContent}
+    <View style={styles.hudItem}>
+      <Text style={styles.hudLabel}>{label}</Text>
+      <Text style={[styles.hudValue, highlight && { color: colors.warn }]}>{value}</Text>
     </View>
   );
 }
@@ -776,98 +816,122 @@ function StatBadge({ label, value, color }: { label: string; value: string; colo
 }
 
 const styles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: '#050508' },
+  root: { flex: 1, backgroundColor: '#060609' },
 
+  // ── Header ────────────────────────────────────────────────────────────────
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.sm,
-    zIndex: 10,
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg, paddingBottom: spacing.sm, zIndex: 20,
   },
-  back: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: spacing.sm,
-    paddingRight: spacing.md,
-    gap: 2,
-  },
+  back: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingRight: spacing.md },
   backChevron: { fontSize: 22, fontWeight: '300', color: colors.vibe, marginTop: -1 },
   backText: { ...type.body, color: colors.vibe },
-  screenTitle: { ...type.title, color: colors.text, textAlign: 'center' },
+  screenTitle: { ...type.title, color: colors.text },
   scoreWrap: {
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-    borderRadius: radius.pill,
-    backgroundColor: 'rgba(255,214,10,0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255,214,10,0.2)',
+    paddingHorizontal: 14, paddingVertical: 6, borderRadius: radius.pill,
+    backgroundColor: 'rgba(255,214,10,0.12)', borderWidth: 1, borderColor: 'rgba(255,214,10,0.2)',
   },
   scoreNum: { ...type.label, fontSize: 16, color: colors.warn, fontVariant: ['tabular-nums'] },
+  arBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, padding: spacing.sm },
+  arDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.textFaint },
+  arDotOn: { backgroundColor: colors.live },
+  arBtnText: { ...type.caption, color: colors.textDim, letterSpacing: 1 },
 
-  // ── Name entry ─────────────────────────────────────────────────────────────
-  nameOverlay: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xl,
+  // ── Shared layout ─────────────────────────────────────────────────────────
+  centred: {
+    flex: 1, alignItems: 'center', justifyContent: 'center',
+    gap: spacing.md, paddingHorizontal: spacing.xl,
   },
-  nameCard: {
-    width: '100%',
-    alignItems: 'center',
-    gap: spacing.md,
-    padding: spacing.xl,
-    borderRadius: radius.xl,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: 'rgba(10,10,14,0.92)',
+  card: {
+    width: '100%', alignItems: 'center', gap: spacing.md,
+    padding: spacing.xl, borderRadius: radius.xl,
+    borderWidth: 1, borderColor: colors.border,
+    backgroundColor: 'rgba(10,10,16,0.92)',
   },
-  nameIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    alignItems: 'center',
-    justifyContent: 'center',
+  cardIcon: {
+    width: 72, height: 72, borderRadius: 36,
+    alignItems: 'center', justifyContent: 'center',
   },
-  nameIconGlyph: { fontSize: 32 },
-  nameTitle: { ...type.title, fontSize: 22, color: colors.text },
-  nameSub: { ...type.body, color: colors.textDim, textAlign: 'center' },
+  cardIconText: { fontSize: 30 },
+  cardTitle: { ...type.title, fontSize: 22, color: colors.text },
+  cardSub: { ...type.body, color: colors.textDim, textAlign: 'center' },
+
+  // ── Name input ────────────────────────────────────────────────────────────
   nameInput: {
-    width: '100%',
-    height: 52,
-    borderRadius: radius.lg,
-    borderWidth: 1.5,
-    borderColor: colors.vibe,
+    width: '100%', height: 54, borderRadius: radius.lg,
+    borderWidth: 1.5, borderColor: colors.vibe,
     backgroundColor: 'rgba(255,255,255,0.04)',
-    paddingHorizontal: spacing.lg,
-    ...type.body,
-    color: colors.text,
-    fontSize: 18,
-    textAlign: 'center',
-    marginTop: spacing.sm,
+    paddingHorizontal: spacing.lg, ...type.body, color: colors.text,
+    fontSize: 19, textAlign: 'center', marginTop: spacing.sm,
   },
-  nameBtn: { marginTop: spacing.sm, width: '100%' },
-  nameBtnInner: {
-    paddingVertical: spacing.lg,
-    borderRadius: radius.pill,
-    alignItems: 'center',
+
+  // ── Buttons ───────────────────────────────────────────────────────────────
+  primaryBtn: { width: '100%', marginTop: spacing.sm },
+  primaryBtnInner: {
+    paddingVertical: spacing.lg, borderRadius: radius.pill, alignItems: 'center',
   },
-  nameBtnText: { ...type.label, fontSize: 16, color: '#FFFFFF' },
-  skipBtn: { paddingVertical: spacing.sm },
-  skipText: { ...type.caption, color: colors.textFaint },
+  primaryBtnText: { ...type.label, fontSize: 17, color: '#FFFFFF', letterSpacing: 0.5 },
+  ghostBtn: { paddingVertical: spacing.sm },
+  ghostBtnText: { ...type.body, color: colors.textDim },
+
+  // ── Source picker ─────────────────────────────────────────────────────────
+  setupTitle: { ...type.display, fontSize: 26, color: colors.text, textAlign: 'center' },
+  setupSub: { ...type.body, color: colors.textDim, textAlign: 'center', marginBottom: spacing.sm },
+  sourceCard: {
+    width: '100%', flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+    padding: spacing.lg, borderRadius: radius.xl, borderWidth: 1,
+    borderColor: colors.border, backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  sourceCardActive: {
+    borderColor: colors.vibe, backgroundColor: 'rgba(10,132,255,0.08)',
+  },
+  sourceIcon: {
+    width: 52, height: 52, borderRadius: radius.lg,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  sourceIconText: { fontSize: 22, color: '#FFFFFF' },
+  sourceInfo: { flex: 1, gap: 3 },
+  sourceTitle: { ...type.label, color: colors.text, fontSize: 15 },
+  sourceSub: { ...type.caption, color: colors.textDim },
+  selectedDot: {
+    width: 10, height: 10, borderRadius: 5, backgroundColor: colors.vibe,
+  },
+  jamSectionLabel: {
+    ...type.caption, letterSpacing: 2, color: colors.textFaint,
+    alignSelf: 'flex-start', marginTop: spacing.md,
+  },
+  loadingText: { ...type.caption, color: colors.textDim },
+
+  // ── Ready screen ──────────────────────────────────────────────────────────
+  readyIcon: {
+    width: 88, height: 88, borderRadius: 44,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  readyGlyph: { fontSize: 40, color: '#FFFFFF' },
+  readyTitle: { ...type.display, fontSize: 28, color: colors.text, textAlign: 'center' },
+  readySub: { ...type.body, color: colors.textDim },
+  readyInstructions: {
+    ...type.body, color: colors.textDim, textAlign: 'center', lineHeight: 24,
+    paddingHorizontal: spacing.md,
+  },
+  lanePreview: {
+    flexDirection: 'row', width: '100%', gap: spacing.sm, marginVertical: spacing.sm,
+  },
+  lanePreviewBlock: {
+    flex: 1, height: 56, borderRadius: radius.md, borderWidth: 1.5,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  lanePreviewLabel: { ...type.caption, fontWeight: '700', fontSize: 11 },
 
   // ── HUD ───────────────────────────────────────────────────────────────────
   hud: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: spacing.xxl,
-    paddingVertical: spacing.md,
-    zIndex: 10,
+    flexDirection: 'row', justifyContent: 'center', gap: spacing.xxl,
+    paddingVertical: spacing.md, zIndex: 10,
   },
   hudItem: { alignItems: 'center', gap: 4 },
   hudLabel: { ...type.caption, fontSize: 9, letterSpacing: 2, color: colors.textFaint },
   hudValue: { ...type.title, fontSize: 20, color: colors.text, fontVariant: ['tabular-nums'] },
+  missHud: { alignItems: 'center', gap: 4 },
   missRow: { flexDirection: 'row', gap: 6 },
   missDot: {
     width: 12, height: 12, borderRadius: 6,
@@ -875,157 +939,100 @@ const styles = StyleSheet.create({
   },
   missDotFilled: { backgroundColor: colors.accent, borderColor: colors.accent },
 
-  // ── Lanes ─────────────────────────────────────────────────────────────────
-  lanes: { ...StyleSheet.absoluteFillObject, zIndex: 0 },
+  // ── Lane guide ────────────────────────────────────────────────────────────
   laneLine: {
-    position: 'absolute', top: 0, bottom: 0,
-    width: 1, backgroundColor: 'rgba(255,255,255,0.06)',
-  },
-
-  // ── Hit zone ──────────────────────────────────────────────────────────────
-  hitZone: {
-    position: 'absolute', left: 0, right: 0,
-    height: 6, zIndex: 1, alignItems: 'center',
-  },
-  hitZoneGlow: {
-    position: 'absolute', left: 0, right: 0, top: -35, height: 76,
+    position: 'absolute', top: 0, bottom: 0, width: 1,
+    backgroundColor: 'rgba(255,255,255,0.04)',
   },
   hitZoneLine: {
-    height: 2, marginHorizontal: spacing.md, borderRadius: 1,
-    backgroundColor: colors.vibe, alignSelf: 'stretch',
+    position: 'absolute', left: 0, right: 0, height: 40, zIndex: 1,
+    alignItems: 'center', justifyContent: 'center',
   },
-  hitZoneLabel: {
-    ...type.caption, fontSize: 9, letterSpacing: 3,
-    color: 'rgba(10,132,255,0.5)', marginTop: 6,
+  hitZoneBar: {
+    height: 2, alignSelf: 'stretch',
+    marginHorizontal: spacing.sm,
+    borderRadius: 1,
+    backgroundColor: 'rgba(255,255,255,0.25)',
   },
 
   // ── Tiles ─────────────────────────────────────────────────────────────────
   tile: {
     position: 'absolute', height: TILE_H,
-    borderRadius: radius.md, borderWidth: 1.5,
-    alignItems: 'center', justifyContent: 'center', zIndex: 2,
-    overflow: 'hidden',
+    borderRadius: radius.lg, borderWidth: 1.5,
+    alignItems: 'center', justifyContent: 'center',
+    zIndex: 5, overflow: 'hidden',
   },
-  tileGlow: {
-    position: 'absolute', top: 0, left: 0, right: 0, height: 3,
-    opacity: 0.8,
+  tileTopGlow: {
+    position: 'absolute', top: 0, left: 0, right: 0, height: 3, opacity: 0.9,
   },
   tileLabel: {
     ...type.label, fontSize: 14, color: '#FFFFFF',
     textTransform: 'uppercase', letterSpacing: 1,
   },
-  flashOverlay: {
-    position: 'absolute', height: 80,
-    opacity: 0.18, borderRadius: radius.md, zIndex: 3,
+  hitEffect: {
+    position: 'absolute', height: 90, zIndex: 8,
+    borderRadius: radius.md, alignItems: 'center', justifyContent: 'center',
+  },
+  hitLabel: {
+    ...type.label, fontSize: 16, color: '#FFFFFF',
+    letterSpacing: 2, fontWeight: '900',
   },
 
-  // ── Tap zones ─────────────────────────────────────────────────────────────
-  playerBadge: {
-    position: 'absolute', alignSelf: 'center', zIndex: 5,
-    paddingHorizontal: spacing.lg, paddingVertical: spacing.xs,
-    borderRadius: radius.pill, backgroundColor: 'rgba(10,132,255,0.15)',
-    borderWidth: 1, borderColor: 'rgba(10,132,255,0.3)',
+  // ── 3 PIANO BLOCKS ────────────────────────────────────────────────────────
+  pianoRow: {
+    position: 'absolute', left: 0, right: 0,
+    flexDirection: 'row', zIndex: 15,
   },
-  playerBadgeText: { ...type.caption, fontSize: 11, color: colors.vibe, letterSpacing: 1 },
-  tapArea: {
-    position: 'absolute', left: spacing.md, right: spacing.md,
-    height: 100, flexDirection: 'row', zIndex: 5,
+  pianoBlock: {
+    flex: 1,
+    borderTopWidth: 2,
+    borderLeftWidth: 0.5,
+    borderRightWidth: 0.5,
+    borderBottomWidth: 0,
+    alignItems: 'center',
+    paddingTop: spacing.md,
+    paddingBottom: spacing.lg,
   },
-  tapLane: { flex: 1, alignItems: 'center', justifyContent: 'center', borderRadius: radius.lg },
-  tapLanePressed: { backgroundColor: 'rgba(255,255,255,0.07)' },
-  tapTarget: {
-    width: 64, height: 64, borderRadius: 32,
-    alignItems: 'center', justifyContent: 'center',
-    backgroundColor: 'rgba(255,255,255,0.05)',
-    borderWidth: 1.5, borderColor: 'rgba(255,255,255,0.12)', gap: 2,
+  pianoTopEdge: {
+    position: 'absolute', top: 0, left: 0, right: 0, height: 3, borderRadius: 1.5,
   },
-  tapCircle: {
-    width: 18, height: 18, borderRadius: 9,
-    borderWidth: 2, borderColor: 'rgba(255,255,255,0.3)',
+  pianoContent: {
+    alignItems: 'center', gap: spacing.sm, flex: 1, justifyContent: 'center',
   },
-  tapText: { ...type.caption, fontSize: 8, letterSpacing: 2, color: 'rgba(255,255,255,0.35)' },
+  pianoCircle: {
+    width: 56, height: 56, borderRadius: 28,
+    borderWidth: 2, alignItems: 'center', justifyContent: 'center',
+  },
+  pianoNum: { ...type.title, fontSize: 20, fontWeight: '900' },
+  pianoLabel: {
+    ...type.label, fontSize: 13, textAlign: 'center',
+    maxWidth: 90, fontWeight: '700',
+  },
+  pianoHint: {
+    ...type.caption, fontSize: 9, letterSpacing: 2, marginTop: 2,
+  },
 
-  // ── Start / over overlays ─────────────────────────────────────────────────
-  startOverlay: {
-    flex: 1, alignItems: 'center', justifyContent: 'center',
-    gap: spacing.md, paddingHorizontal: spacing.xl,
-  },
-  startIcon: {
-    width: 80, height: 80, borderRadius: 40,
-    alignItems: 'center', justifyContent: 'center',
-  },
-  startGlyph: { fontSize: 36, color: '#FFFFFF' },
-  startTitle: { ...type.display, fontSize: 28, color: colors.text, textAlign: 'center' },
-  startSub: { ...type.body, color: colors.textDim, textAlign: 'center', lineHeight: 22 },
+  // ── Game over ─────────────────────────────────────────────────────────────
+  overTitle: { ...type.display, fontSize: 32, color: colors.text, textAlign: 'center' },
+  overSub: { ...type.body, color: colors.textDim },
+  overStats: { flexDirection: 'row', gap: spacing.sm },
+  overButtons: { gap: spacing.md, alignItems: 'center', width: '100%' },
 
-  arToggle: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-    paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
-    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border,
-    backgroundColor: 'rgba(255,255,255,0.04)',
-  },
-  arDot: {
-    width: 10, height: 10, borderRadius: 5,
-    backgroundColor: colors.textFaint,
-  },
-  arDotOn: { backgroundColor: colors.live },
-  arLabel: { ...type.caption, color: colors.textDim },
-
-  startBtn: { marginTop: spacing.sm },
-  startBtnInner: {
-    paddingHorizontal: spacing.xxl * 1.5, paddingVertical: spacing.lg,
-    borderRadius: radius.pill,
-  },
-  startBtnText: { ...type.label, fontSize: 16, color: '#FFFFFF', letterSpacing: 0.5 },
-
-  // ── Mini leaderboard (start screen) ──────────────────────────────────────
-  miniBoard: {
-    width: '100%', borderRadius: radius.lg, borderWidth: 1,
-    borderColor: colors.border, backgroundColor: 'rgba(10,10,14,0.85)',
-    padding: spacing.lg, gap: spacing.sm, marginTop: spacing.sm,
-  },
-  miniBoardTitle: {
-    ...type.caption, letterSpacing: 2, color: colors.warn, marginBottom: spacing.xs,
-  },
-  miniBoardRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-  },
-  miniBoardRank: { ...type.caption, color: colors.textFaint, width: 24 },
-  miniBoardName: { ...type.label, color: colors.text, flex: 1, fontSize: 13 },
-  miniBoardScore: { ...type.label, color: colors.warn, fontSize: 14, fontVariant: ['tabular-nums'] },
-
-  // ── Full leaderboard (game over) ──────────────────────────────────────────
   leaderboard: {
     width: '100%', borderRadius: radius.lg, borderWidth: 1,
-    borderColor: colors.border, backgroundColor: 'rgba(10,10,14,0.9)',
-    padding: spacing.lg, gap: spacing.sm, maxHeight: 280,
+    borderColor: colors.border, backgroundColor: 'rgba(10,10,16,0.9)',
+    padding: spacing.lg, gap: spacing.sm,
   },
-  lbTitle: {
-    ...type.caption, letterSpacing: 2, color: colors.warn, marginBottom: spacing.xs,
-  },
-  lbRow: {
-    flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-    paddingVertical: 4,
-  },
-  lbRowHighlight: {
+  lbTitle: { ...type.caption, letterSpacing: 2, color: colors.warn, marginBottom: spacing.xs },
+  lbRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 4 },
+  lbRowMe: {
     backgroundColor: 'rgba(10,132,255,0.1)',
     borderRadius: radius.sm, paddingHorizontal: spacing.sm,
   },
   lbRank: { ...type.caption, color: colors.textFaint, width: 28, textAlign: 'center' },
   lbName: { ...type.label, color: colors.text, flex: 1, fontSize: 13 },
-  lbScore: { ...type.label, color: colors.warn, fontSize: 13, fontVariant: ['tabular-nums'] },
+  lbScore: { ...type.label, color: colors.warn, fontSize: 14, fontVariant: ['tabular-nums'] },
   lbCombo: { ...type.caption, color: colors.textDim, width: 32, textAlign: 'right' },
-
-  // ── Game over ─────────────────────────────────────────────────────────────
-  overTitle: { ...type.display, fontSize: 30, color: colors.text, textAlign: 'center' },
-  overSub: { ...type.body, color: colors.textDim },
-  overStats: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.sm },
-  overButtons: { gap: spacing.md, alignItems: 'center', marginTop: spacing.md },
-  backToStudio: {
-    paddingHorizontal: spacing.xl, paddingVertical: spacing.md,
-    borderRadius: radius.pill, borderWidth: 1, borderColor: colors.border,
-  },
-  backToStudioText: { ...type.label, color: colors.textDim },
 
   statBadge: {
     alignItems: 'center', gap: 4, paddingVertical: spacing.lg,
