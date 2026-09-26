@@ -42,6 +42,26 @@ object WorldVisionRuntime {
         registered = true
     }
 
+    /**
+     * Keeps llama.rn (Gemma) on the CPU path it had before this module existed.
+     *
+     * Declaring libcdsprpc.so for QNN makes FastRPC reachable to every library
+     * in the process. llama.rn then tries to start its own ggml Hexagon backend,
+     * cannot find its skel libraries (the npm package does not ship them) and
+     * fails model init with "Unknown error". It only configures that backend
+     * when its libraries install; otherwise pin its device count to zero. If
+     * llama.rn did set it, respect that.
+     */
+    fun isolateLlamaFromDsp() {
+        try {
+            if (android.system.Os.getenv("LM_GGML_HEXAGON_NDEV") == null) {
+                android.system.Os.setenv("LM_GGML_HEXAGON_NDEV", "0", false)
+            }
+        } catch (t: Throwable) {
+            android.util.Log.w("WorldVision", "Could not set LM_GGML_HEXAGON_NDEV: ${t.message}")
+        }
+    }
+
     fun readoutPreference(ctx: Context): Boolean =
         ctx.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getBoolean(KEY_READOUT, true)
 
@@ -91,6 +111,7 @@ class WorldVisionModule : Module() {
         Events("onVisionState", "onReadout", "onFormatRequest", "onStatus")
 
         OnCreate {
+            WorldVisionRuntime.isolateLlamaFromDsp()
             WorldVisionRuntime.registerPlugin()
         }
 
