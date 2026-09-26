@@ -1,0 +1,62 @@
+apply plugin: 'com.android.library'
+
+group = 'com.worldjam.vision'
+version = '0.1.0'
+
+// Same wiring as modules/worldjam-audio: Kotlin plugin, expo-modules-core and
+// the shared SDK versions come from ExpoModulesCorePlugin.
+def expoModulesCorePlugin = new File(
+  project(":expo-modules-core").projectDir.absolutePath,
+  "ExpoModulesCorePlugin.gradle"
+)
+apply from: expoModulesCorePlugin
+applyKotlinExpoModulesCorePlugin()
+useCoreDependencies()
+useDefaultAndroidSdkVersions()
+
+android {
+  namespace 'com.worldjam.vision'
+
+  defaultConfig {
+    minSdkVersion 26
+    versionCode 1
+    versionName '0.1.0'
+    ndk {
+      abiFilters 'arm64-v8a'
+    }
+  }
+
+  // Models are opened by path after being copied out of the APK, but keep them
+  // uncompressed anyway so the copy is a straight stream.
+  aaptOptions {
+    noCompress 'tflite', 'onnx'
+  }
+
+  testOptions {
+    unitTests.returnDefaultValues = true
+  }
+}
+
+dependencies {
+  // Frames come from the camera stack the app already ships; no second camera.
+  implementation project(':react-native-vision-camera')
+  // VisionCamera keeps CameraX as an implementation detail; Frame.getImageProxy()
+  // returns its ImageProxy, so compile against the exact same version. The
+  // runtime copy is VisionCamera's own.
+  compileOnly 'androidx.camera:camera-core:1.5.0-alpha03'
+
+  // LiteRT at exactly the version react-native-fast-tflite already pulls in,
+  // so Gradle resolves one runtime rather than two.
+  implementation 'com.google.ai.edge.litert:litert:1.0.1'
+  implementation 'com.google.ai.edge.litert:litert-gpu:1.0.1'
+
+  // ONNX Runtime with the QNN execution provider (Hexagon HTP / NPU).
+  // qnn-runtime is pinned to 2.46.0 because the bundled context binary was
+  // compiled with QNN SDK 2.46.0 (see the model's ep_compatibility_info);
+  // onnxruntime-android-qnn would otherwise resolve 2.42.0 transitively and
+  // fail to load it.
+  implementation 'com.microsoft.onnxruntime:onnxruntime-android-qnn:1.26.0'
+  implementation 'com.qualcomm.qti:qnn-runtime:2.46.0'
+
+  testImplementation 'junit:junit:4.13.2'
+}

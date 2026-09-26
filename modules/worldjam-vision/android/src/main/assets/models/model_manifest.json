@@ -1,0 +1,37 @@
+{
+  "manifestVersion": 1,
+  "labels": "coco80.txt",
+  "models": [
+    {
+      "id": "yolo26n-qnn-v81",
+      "name": "YOLO26n",
+      "file": "yolo26n_v81_qnn.onnx",
+      "format": "onnx-qnn",
+      "target": "htp-v81",
+      "inputSize": 640,
+      "inputLayout": "NHWC",
+      "output": [1, 84, 8400],
+      "quantization": "w8a16",
+      "qnnSdk": "2.46.0",
+      "version": "v0.6.6",
+      "source": "https://github.com/ultralytics/yolo-flutter-app/releases/download/v0.6.6/yolo26n_v81_qnn.onnx",
+      "license": "AGPL-3.0",
+      "sha256": "af9aef5131b59cbfe9af10b2fab6bccc74606a62d316599621736564b942f27d"
+    },
+    {
+      "id": "yolo26n-litert",
+      "name": "YOLO26n",
+      "file": "yolo26n_w8a32.tflite",
+      "format": "litert",
+      "target": "android",
+      "inputSize": 640,
+      "inputLayout": "NCHW",
+      "output": [1, 84, 8400],
+      "quantization": "w8a32",
+      "version": "v0.6.6",
+      "source": "https://github.com/ultralytics/yolo-flutter-app/releases/download/v0.6.6/yolo26n_w8a32.tflite",
+      "license": "AGPL-3.0",
+      "sha256": "d9cef07ce652ccfa9ce58e4ac8a4df98ff037739a9dad20a8afcae21b545df73"
+    }
+  ]
+}

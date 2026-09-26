@@ -1,0 +1,7 @@
+{
+  "name": "worldjam-vision",
+  "version": "0.1.0",
+  "description": "On-device object detection and audio read-out for WorldJam (YOLO26n via QNN / LiteRT)",
+  "main": "src/index.ts",
+  "private": true
+}
