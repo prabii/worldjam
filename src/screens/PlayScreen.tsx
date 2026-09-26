@@ -29,15 +29,19 @@ interface Props {
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 const LANE_COUNT = 3;
 const TILE_H = 86;
-/** Height of the AR floor pads at the bottom — big enough for a foot. */
+/** Visual height of the lit pad at the bottom of each lane. */
 const PAD_H = 190;
 /**
- * How far above the pad top a tile still counts as a hit.
- * A foot is coarse and slow, so this is deliberately generous.
+ * Timing windows, in milliseconds either side of the beat.
+ *
+ * A foot is heavier and slower to place than a thumb, and the player is
+ * looking down at the floor rather than holding the phone at reading
+ * distance, so these are roughly triple a hand-played rhythm game's.
  */
-const HIT_ABOVE = 170;
-/** How far past the pad top a late tile still counts. */
-const HIT_BELOW = 120;
+const EARLY_MS = 420;
+const LATE_MS = 320;
+const PERFECT_MS = 150;
+const GOOD_MS = 300;
 const LEADERBOARD_PATH = `${FileSystem.documentDirectory}worldjam-leaderboard.json`;
 
 type BeatSource = 'grid' | 'jam' | 'ai';
@@ -295,7 +299,7 @@ export function PlayScreen({ onBack }: Props) {
     tilesRef.current = tilesRef.current.filter((t) => {
       if (t.hit) return false;
       const late = now - t.dueAt;
-      if (late > HIT_BELOW + PAD_H) {
+      if (late > LATE_MS) {
         if (!t.missed) missedThisFrame++;
         return false;
       }
@@ -368,23 +372,26 @@ export function PlayScreen({ onBack }: Props) {
       for (const t of tilesRef.current) {
         if (t.lane !== lane || t.hit) continue;
         const off = now - t.dueAt; // negative = early, positive = late
-        const px = (Math.abs(off) / travelMs) * (padTop + TILE_H);
-        if (off < 0 ? px > HIT_ABOVE : px > HIT_BELOW) continue;
+        if (off < -EARLY_MS || off > LATE_MS) continue;
         if (Math.abs(off) < bestOff) {
           bestOff = Math.abs(off);
           best = t;
         }
       }
 
-      if (!best) return;
+      // A stamp with nothing in range still sounds the lane's own sound, so
+      // the floor always answers the foot. It just does not score.
+      if (!best) {
+        const idle = laneObjects[lane];
+        if (idle) playObject(idle.id);
+        return;
+      }
 
       best.hit = true;
       const obj = laneObjects[lane];
       if (obj) playObject(obj.id);
 
-      // Timing grades are in milliseconds, not pixels — a foot is slow, so
-      // the windows are wide compared with a thumb-played rhythm game.
-      const kind = bestOff < 140 ? 'PERFECT' : bestOff < 300 ? 'GOOD' : 'OK';
+      const kind = bestOff < PERFECT_MS ? 'PERFECT' : bestOff < GOOD_MS ? 'GOOD' : 'OK';
       const points = kind === 'PERFECT' ? 30 : kind === 'GOOD' ? 20 : 10;
 
       setPadFlash({ lane, kind });
@@ -399,7 +406,7 @@ export function PlayScreen({ onBack }: Props) {
       setScore(scoreRef.current);
       setCombo(comboRef.current);
     },
-    [step, travelMs, padTop, laneObjects, playObject],
+    [step, laneObjects, playObject],
   );
 
   // ── Setup actions ─────────────────────────────────────────────────────────
@@ -680,14 +687,20 @@ export function PlayScreen({ onBack }: Props) {
           </View>
 
           <Text style={styles.readyHow}>
-            Put the phone on the floor, camera up.{'\n'}
-            Stamp the pad when its tile lands.{'\n'}
+            Lay the phone on the floor, screen up.{'\n'}
+            Stamp <Text style={styles.readyEm}>left</Text>,{' '}
+            <Text style={styles.readyEm}>middle</Text> or{' '}
+            <Text style={styles.readyEm}>right</Text> with your foot as each
+            tile lands.{'\n'}
+            The whole third of the screen is the pad — aim does not matter.{'\n'}
             Three misses and you&apos;re out.
           </Text>
 
           {!arOn && (
             <Pressable onPress={enableAR} style={styles.arPrompt}>
-              <Text style={styles.arPromptText}>📷 Turn on AR camera</Text>
+              <Text style={styles.arPromptText}>
+                📷 AR camera — for playing propped up
+              </Text>
             </Pressable>
           )}
 
@@ -836,8 +849,16 @@ export function PlayScreen({ onBack }: Props) {
             </View>
           )}
 
-          {/* The three floor pads. */}
-          <View style={[styles.padRow, { top: padTop, height: PAD_H + insets.bottom }]}>
+          {/*
+            Three stamp columns spanning the full height of the screen.
+
+            The phone lies face-up on the floor and is struck with a foot, so
+            aim is coarse: the player is looking at their shoe, not at the
+            glass. Every pixel therefore belongs to a lane — land anywhere on
+            the left third and the left lane fires. The lit pad at the bottom
+            is only where the tiles arrive; it is not the touch target.
+          */}
+          <View style={[styles.stampLayer, { top: insets.top + 44 }]}>
             {LANE_PALETTE.map((lp, i) => {
               const down = pressedLane === i;
               return (
@@ -848,46 +869,59 @@ export function PlayScreen({ onBack }: Props) {
                     strike(i);
                   }}
                   onPressOut={() => setPressedLane(null)}
-                  // A foot lands wide and early; reach up the runway for it.
-                  hitSlop={{ top: HIT_ABOVE, bottom: 0, left: 0, right: 0 }}
                   android_disableSound
                   accessibilityRole="button"
-                  accessibilityLabel={`Pad ${i + 1}, ${laneLabels[i]}`}
-                  style={[
-                    styles.pad,
-                    {
-                      borderColor: down ? lp.base : `${lp.base}44`,
-                      backgroundColor: down ? lp.glow : `${lp.base}0F`,
-                    },
-                  ]}
+                  accessibilityLabel={`Lane ${i + 1}, ${laneLabels[i]}`}
+                  style={styles.stampColumn}
                 >
+                  {/* The column lights along its whole length when struck. */}
                   <View
                     style={[
-                      styles.padLip,
-                      { backgroundColor: lp.base, opacity: down ? 1 : 0.45 },
+                      StyleSheet.absoluteFill,
+                      { backgroundColor: down ? lp.soft : 'transparent' },
                     ]}
+                    pointerEvents="none"
                   />
-                  <View style={styles.padBody}>
+                  {/* The pad itself, at the far end of the runway. */}
+                  <View
+                    pointerEvents="none"
+                    style={[
+                      styles.pad,
+                      {
+                        height: PAD_H + insets.bottom,
+                        borderColor: down ? lp.base : `${lp.base}44`,
+                        backgroundColor: down ? lp.glow : `${lp.base}0F`,
+                      },
+                    ]}
+                  >
                     <View
                       style={[
-                        styles.padRing,
-                        {
-                          borderColor: lp.base,
-                          backgroundColor: down ? `${lp.base}55` : 'transparent',
-                          transform: [{ scale: down ? 1.12 : 1 }],
-                        },
+                        styles.padLip,
+                        { backgroundColor: lp.base, opacity: down ? 1 : 0.45 },
                       ]}
-                    >
-                      <Text style={[styles.padNum, { color: down ? '#FFF' : lp.base }]}>
-                        {i + 1}
+                    />
+                    <View style={styles.padBody}>
+                      <View
+                        style={[
+                          styles.padRing,
+                          {
+                            borderColor: lp.base,
+                            backgroundColor: down ? `${lp.base}55` : 'transparent',
+                            transform: [{ scale: down ? 1.12 : 1 }],
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.padNum, { color: down ? '#FFF' : lp.base }]}>
+                          {i + 1}
+                        </Text>
+                      </View>
+                      <Text
+                        style={[styles.padLabel, { color: down ? '#FFF' : lp.base }]}
+                        numberOfLines={1}
+                      >
+                        {laneLabels[i]}
                       </Text>
                     </View>
-                    <Text
-                      style={[styles.padLabel, { color: down ? '#FFF' : lp.base }]}
-                      numberOfLines={1}
-                    >
-                      {laneLabels[i]}
-                    </Text>
                   </View>
                 </Pressable>
               );
@@ -1112,6 +1146,7 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 23,
   },
+  readyEm: { color: colors.text, fontWeight: '700' },
   padPreview: { flexDirection: 'row', width: '100%', gap: spacing.sm, marginVertical: spacing.sm },
   padPreviewBlock: {
     flex: 1,
@@ -1180,9 +1215,9 @@ const styles = StyleSheet.create({
   flash: { position: 'absolute', alignItems: 'center', zIndex: 18 },
   flashText: { ...type.label, fontSize: 18, fontWeight: '900', letterSpacing: 2 },
 
-  padRow: { position: 'absolute', left: 0, right: 0, flexDirection: 'row', zIndex: 25 },
+  stampLayer: { ...StyleSheet.absoluteFillObject, flexDirection: 'row', zIndex: 25 },
+  stampColumn: { flex: 1, justifyContent: 'flex-end' },
   pad: {
-    flex: 1,
     borderTopWidth: 2,
     borderLeftWidth: 0.5,
     borderRightWidth: 0.5,
