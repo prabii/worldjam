@@ -367,7 +367,7 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
             </View>
             <View style={styles.capturedFooter}>
               <Text style={[styles.capturedSub, { flex: 1 }]}>
-                Real sound from your {lastObject.label.toLowerCase()}
+                Real recorded sound · {lastObject.label}
               </Text>
               <Pressable
                 onPress={() => openRename(lastObject.id, lastObject.label)}

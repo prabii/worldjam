@@ -291,6 +291,7 @@ class ObjectDetectorService(
                 for (v in visible) DepthSampler.sample(map, d.width, d.height, v.bbox, lb)?.let { trackDepth[v.trackId] = it }
                 lastDepthMs = (System.nanoTime() - td) / 1e6
             }
+            visibleForLog = visible
             val target = closest.resolve(visible, { id -> trackDepth[id] }, cfg)
             lastTarget = target
             maybeEmitTarget(target, now)
@@ -442,9 +443,17 @@ class ObjectDetectorService(
                 "depth=${depthState}/${depth?.target} depth_ms=${"%.1f".format(lastDepthMs)} " +
                 "processed=${d["framesProcessed"]} dropped=${d["framesDropped"]} primary=${d["primary"]} count=${d["objectCount"]} " +
                 "target=${t?.label}/${t?.method}/${t?.depth?.let { "%.2f".format(it) }} " +
+                "cands=${lastVisibleDepths()} " +
                 "tts_p50=${"%.0f".format(d["ttsLatencyMsP50"] as Double)} spoken=${readout.spokenCount}",
         )
     }
+
+    /** label:depth for the visible tracks, nearest first — for verifying depth ordering on device. */
+    @Volatile private var visibleForLog: List<VisionDetection> = emptyList()
+
+    private fun lastVisibleDepths(): String =
+        visibleForLog.mapNotNull { v -> trackDepth[v.trackId]?.let { v.label.replace(' ', '_') to it } }
+            .sortedBy { it.second }.take(6).joinToString(",") { "${it.first}:${"%.2f".format(it.second)}" }
 
     fun shutdown() {
         running = false

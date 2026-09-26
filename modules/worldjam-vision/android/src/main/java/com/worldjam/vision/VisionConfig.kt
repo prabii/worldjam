@@ -51,10 +51,13 @@ data class VisionConfig(
     val depthIntervalMs: Long = 330L,
     /** yolo26n-depth outputs metric depth, so a smaller value is nearer. */
     val depthNearIsSmall: Boolean = true,
-    /** A challenger must be this much (relative) nearer to become the capture target... */
-    val closestSwitchMargin: Float = 0.12f,
+    /** A challenger must be this much (relative) nearer to become the capture target. yolo26n-depth values are
+     *  compressed (measured 1.56–1.78 across a desk scene), so the margin is small. */
+    val closestSwitchMargin: Float = 0.04f,
     /** ...for this many consecutive evaluations. */
     val closestSwitchFrames: Int = 2,
+    /** Large surfaces that only become the capture target when nothing else is in view (or when tapped). */
+    val surfaceLabels: Set<String> = setOf("table", "desk", "dining table", "bed", "couch"),
 
     /** QNN HTP performance profile. Sustained keeps thermals flat on long runs. */
     val qnnPerformanceMode: String = "sustained_high_performance",

@@ -106,11 +106,49 @@ class CaptureModeTest {
         val a = vd("a", "cup", 0.1f, 0.2f)
         val b = vd("b", "mug", 0.6f, 0.2f)
         assertEquals("cup", r.resolve(listOf(a, b), { mapOf("a" to 1.00f, "b" to 1.05f)[it] }, cfg)!!.label)
-        // b now marginally nearer: within the switch margin, keep a.
-        assertEquals("cup", r.resolve(listOf(a, b), { mapOf("a" to 1.00f, "b" to 0.95f)[it] }, cfg)!!.label)
+        // b now marginally nearer (2%): within the 4% switch margin, keep a.
+        assertEquals("cup", r.resolve(listOf(a, b), { mapOf("a" to 1.00f, "b" to 0.98f)[it] }, cfg)!!.label)
         // b clearly nearer, but must hold for closestSwitchFrames.
         assertEquals("cup", r.resolve(listOf(a, b), { mapOf("a" to 1.00f, "b" to 0.5f)[it] }, cfg)!!.label)
         assertEquals("mug", r.resolve(listOf(a, b), { mapOf("a" to 1.00f, "b" to 0.5f)[it] }, cfg)!!.label)
+    }
+
+    @Test
+    fun surfacesOnlyWinWhenNothingElseIsInView() {
+        val r = ClosestObjectResolver()
+        val desk = vd("d", "desk", 0f, 0.9f)
+        val cup = vd("c", "cup", 0.4f, 0.1f)
+        // Desk is nearer, but a cup is in view: the cup is the target.
+        assertEquals("cup", r.resolve(listOf(desk, cup), { mapOf("d" to 0.3f, "c" to 0.9f)[it] }, cfg)!!.label)
+        // Only the desk: it is allowed.
+        assertEquals("desk", ClosestObjectResolver().resolve(listOf(desk), { 0.3f }, cfg)!!.label)
+    }
+
+    @Test
+    fun tapLocksOntoTheObjectAndReleasesWhenItLeaves() {
+        val r = ClosestObjectResolver()
+        val laptop = vd("a", "laptop", 0.1f, 0.5f)
+        val pen = vd("b", "pen", 0.7f, 0.1f)
+        val depth = mapOf("a" to 1.8f, "b" to 0.4f)
+        r.focus = 0.3f to 0.5f
+        assertEquals("laptop", r.resolve(listOf(laptop, pen), { depth[it] }, cfg)!!.label)
+        // Camera moves: the laptop's box no longer covers the tapped point, but it is still the tapped object.
+        val moved = vd("a", "laptop", 0.45f, 0.3f)
+        val t = r.resolve(listOf(moved, pen), { depth[it] }, cfg)!!
+        assertEquals("laptop", t.label)
+        assertEquals("tap", t.method)
+        // Laptop leaves the view: back to automatic (nearest = pen), and it stays automatic.
+        assertEquals("depth", r.resolve(listOf(pen), { depth[it] }, cfg)!!.method)
+        val lamp = vd("l", "lamp", 0.2f, 0.3f)
+        assertEquals("depth", r.resolve(listOf(lamp, pen), { mapOf("l" to 5f, "b" to 0.4f)[it] }, cfg)!!.method)
+    }
+
+    @Test
+    fun tapOnEmptySpaceDoesNothing() {
+        val r = ClosestObjectResolver()
+        r.focus = 0.95f to 0.95f
+        val t = r.resolve(listOf(vd("a", "cup", 0.1f, 0.2f)), { 1f }, cfg)!!
+        assertEquals("depth", t.method)
     }
 
     @Test

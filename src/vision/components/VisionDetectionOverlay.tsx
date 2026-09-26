@@ -19,6 +19,21 @@ interface Props {
 const LABEL_H = 22;
 const LABEL_W = 150;
 
+interface Rect { x: number; y: number; w: number; h: number }
+
+function overlaps(a: Rect, b: Rect): boolean {
+  return a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+}
+
+/** Highlighted object first, then smaller boxes (usually the objects, not the surfaces they sit on). */
+function orderForLabels(objects: VisionObjectSummary[], highlight?: string | null): VisionObjectSummary[] {
+  const hot = (o: VisionObjectSummary) => (highlight !== undefined ? o.trackId === highlight : o.isPrimary);
+  return [...objects].sort((a, b) => {
+    if (hot(a) !== hot(b)) return hot(a) ? -1 : 1;
+    return a.bbox.width * a.bbox.height - b.bbox.width * b.bbox.height;
+  });
+}
+
 /**
  * Boxes drawn over the preview. The preview fills the view with `cover`
  * scaling, so boxes (normalised to the full frame) are mapped through the
@@ -32,6 +47,7 @@ export function VisionDetectionOverlay({ objects, frameAspect, highlightTrackId,
 
   const { w, h } = size;
   const map = coverMap(w, h, frameAspect);
+  const placed: Rect[] = [];
 
   return (
     <View
@@ -42,7 +58,7 @@ export function VisionDetectionOverlay({ objects, frameAspect, highlightTrackId,
       importantForAccessibility="no-hide-descendants"
     >
       {w > 0 &&
-        objects.map((o) => {
+        orderForLabels(objects, highlightTrackId).map((o) => {
           const hot = highlightTrackId !== undefined ? o.trackId === highlightTrackId : o.isPrimary;
           const color = hot ? colors.live : colors.vibe;
           const r = map.boxToView(o.bbox);
@@ -52,6 +68,12 @@ export function VisionDetectionOverlay({ objects, frameAspect, highlightTrackId,
           const outsideTop = r.y - LABEL_H;
           const labelTop = outsideTop >= labelMinTop ? outsideTop : Math.max(r.y, labelMinTop) + 2;
           const labelLeft = Math.min(Math.max(r.x, 2), Math.max(2, w - LABEL_W));
+          const text = `${hot ? '● ' : ''}${o.spokenLabel}${hot && highlightTag ? ` · ${highlightTag}` : ''}`;
+          // Greedy placement: the highlighted label is placed first; any later
+          // label that would overlap one already placed is skipped (its box stays).
+          const rect = { x: labelLeft, y: labelTop, w: Math.min(LABEL_W, 16 + text.length * 7.2), h: LABEL_H };
+          const showLabel = labelTop < h - LABEL_H && !placed.some((p) => overlaps(p, rect));
+          if (showLabel) placed.push(rect);
           return (
             <React.Fragment key={o.trackId}>
               <View
@@ -60,14 +82,12 @@ export function VisionDetectionOverlay({ objects, frameAspect, highlightTrackId,
                   { left: r.x, top: r.y, width: r.width, height: r.height, borderColor: color, borderWidth: hot ? 3 : 1.5 },
                 ]}
               />
-              {labelTop < h - LABEL_H && (
+              {showLabel && (
                 <Text
                   style={[styles.label, { top: labelTop, left: labelLeft, maxWidth: LABEL_W, backgroundColor: color }]}
                   numberOfLines={1}
                 >
-                  {hot ? '● ' : ''}
-                  {o.spokenLabel}
-                  {hot && highlightTag ? ` · ${highlightTag}` : ''}
+                  {text}
                 </Text>
               )}
             </React.Fragment>

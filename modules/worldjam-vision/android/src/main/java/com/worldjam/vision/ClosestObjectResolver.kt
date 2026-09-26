@@ -79,12 +79,20 @@ object DepthSampler {
  */
 class ClosestObjectResolver {
 
+    /** A tapped point; resolved to the object under it on the next frame, then tracked by id. */
     @Volatile var focus: Pair<Float, Float>? = null
+        set(value) {
+            field = value
+            focusTrackId = null
+        }
+    /** The object the user tapped. Held while it stays visible, released when it leaves view. */
+    @Volatile private var focusTrackId: String? = null
     private var currentId: String? = null
     private var challengerId: String? = null
     private var challengerFrames = 0
 
     fun reset() {
+        focusTrackId = null
         currentId = null
         challengerId = null
         challengerFrames = 0
@@ -97,22 +105,33 @@ class ClosestObjectResolver {
     ): CaptureTarget? {
         if (visible.isEmpty()) return null
 
+        // 1. The tapped object, while it is still in view.
         val f = focus
-        if (f != null) {
-            val hit = visible.filter { it.bbox.contains(f.first, f.second) }.minByOrNull { it.areaRatio }
+        if (f != null && focusTrackId == null) {
+            focusTrackId = visible.filter { it.bbox.contains(f.first, f.second) }.minByOrNull { it.areaRatio }?.trackId
+            if (focusTrackId == null) focus = null // tapped empty space: nothing to lock
+        }
+        focusTrackId?.let { id ->
+            val hit = visible.firstOrNull { it.trackId == id }
             if (hit != null) {
                 currentId = hit.trackId
                 return target(hit, depthOf(hit.trackId), "tap", visible, depthOf, config)
             }
+            focus = null // the tapped object left the view; go back to automatic
         }
 
-        val withDepth = visible.mapNotNull { d -> depthOf(d.trackId)?.let { d to nearness(it, config) } }
+        // Surfaces (desk, table) are nearly always nearest but are rarely what
+        // the user means to strike; they only win when nothing else is in view.
+        val objects = visible.filter { it.label !in config.surfaceLabels }
+        val pool = objects.ifEmpty { visible }
+
+        val withDepth = pool.mapNotNull { d -> depthOf(d.trackId)?.let { d to nearness(it, config) } }
         if (withDepth.isNotEmpty()) {
             val chosen = hysteresis(withDepth, config.closestSwitchMargin, relative = true, config)
             return target(chosen, depthOf(chosen.trackId), "depth", visible, depthOf, config)
         }
 
-        val bySize = visible.map { d ->
+        val bySize = pool.map { d ->
             val area = (d.areaRatio / config.areaSaturation).coerceIn(0f, 1f)
             d to (0.7f * area + 0.3f * d.centerScore)
         }
