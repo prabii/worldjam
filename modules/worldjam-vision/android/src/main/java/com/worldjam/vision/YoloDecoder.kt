@@ -37,7 +37,13 @@ data class Letterbox(
  * Ultralytics' own Android runtime uses), so both backends produce identical
  * [RawDetection]s.
  */
-class YoloDecoder(private val labels: List<String>) {
+class YoloDecoder(
+    private val labels: List<String>,
+    /** Class rows in the tensor. Seg-headed models add mask coefficients after them, which are not classes. */
+    private val classCount: Int = labels.size,
+    /** When set, detections with any other label are discarded (e.g. people from the COCO fallback). */
+    private val allowedLabels: Set<String>? = null,
+) {
 
     fun decode(
         output: FloatArray,
@@ -48,7 +54,7 @@ class YoloDecoder(private val labels: List<String>) {
         iouThreshold: Float,
         maxDetections: Int,
     ): List<RawDetection> {
-        val numClasses = numFeatures - 4
+        val numClasses = minOf(classCount, numFeatures - 4)
         require(numClasses > 0) { "Expected at least one class, got $numFeatures features" }
         require(output.size >= numFeatures * numAnchors) {
             "Output has ${output.size} values, expected ${numFeatures * numAnchors}"
@@ -113,6 +119,7 @@ class YoloDecoder(private val labels: List<String>) {
 
             val cls = keptClass[k]
             val label = labels.getOrElse(cls) { "object" }
+            if (allowedLabels != null && label !in allowedLabels) continue
             candidates.add(RawDetection(cls, label, keptScore[k], NormBox(nx1, ny1, bw, bh)))
         }
 

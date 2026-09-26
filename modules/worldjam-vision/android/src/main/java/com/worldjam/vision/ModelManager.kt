@@ -8,17 +8,41 @@ import java.io.File
 import java.io.InputStream
 import java.security.MessageDigest
 
-/** A model on disk, ready to hand to a runtime. */
+/** A model on disk, verified, with everything a runtime and decoder need. */
 data class ModelFile(
     val id: String,
+    val role: String,           // "detector" | "depth"
     val name: String,
-    val format: String,
+    val format: String,         // "onnx-qnn" | "onnx-cpu" | "litert"
     val path: String,
     val inputSize: Int,
     val version: String,
     val sha256: String,
     val verified: Boolean,
     val source: String,
+    val labels: List<String>,
+    val numClasses: Int,
+    /** When non-null, detections with other labels are dropped (used to strip people from COCO). */
+    val allowedLabels: Set<String>?,
+    val outputName: String?,
+)
+
+/** A manifest entry, before its file is extracted. */
+data class ModelInfo(
+    val id: String,
+    val role: String,
+    val name: String,
+    val file: String,
+    val format: String,
+    val inputSize: Int,
+    val version: String,
+    val sha256: String,
+    val source: String,
+    val labelsFile: String?,
+    val numClasses: Int,
+    val allowedLabels: Set<String>?,
+    val outputName: String?,
+    val priority: Int,
 )
 
 object Checksums {
@@ -37,66 +61,65 @@ object Checksums {
 }
 
 /**
- * Finds, verifies and caches detector models.
+ * Finds, verifies and caches models listed in assets/models/model_manifest.json.
  *
  * Models ship inside the APK (offline from first launch). On first use each is
- * copied to app-private storage, SHA-256 checked against model_manifest.json,
- * and atomically renamed into a versioned directory, so a half-written or
- * tampered file is never loaded. A developer can drop a replacement into
- * `files/vision-models/override/` with `adb run-as`; it is used only if its
- * hash matches the manifest, otherwise reported and ignored.
- *
- * No network: Phase 1 is offline-only.
+ * copied to app-private storage, SHA-256 checked, and atomically renamed into a
+ * versioned directory, so a half-written or tampered file is never loaded. A
+ * developer override in `files/vision-models/override/` is used only when its
+ * hash matches the manifest. No network access.
  */
 class ModelManager(private val context: Context) {
 
-    private data class Entry(
-        val id: String, val name: String, val file: String, val format: String,
-        val inputSize: Int, val version: String, val sha256: String, val source: String,
-    )
-
     private val tag = "WorldVision"
     private val baseDir = File(context.filesDir, "vision-models")
+    private val labelCache = HashMap<String, List<String>>()
 
-    val labels: List<String> by lazy {
-        context.assets.open("models/$labelsFile").bufferedReader().readLines().map { it.trim() }.filter { it.isNotEmpty() }
-    }
-
-    private var labelsFile = "coco80.txt"
-
-    private val entries: List<Entry> by lazy {
-        val json = context.assets.open("models/model_manifest.json").bufferedReader().readText()
-        val root = JSONObject(json)
-        labelsFile = root.optString("labels", "coco80.txt")
+    val entries: List<ModelInfo> by lazy {
+        val root = JSONObject(context.assets.open("models/model_manifest.json").bufferedReader().readText())
         val arr = root.getJSONArray("models")
         (0 until arr.length()).map { i ->
             val o = arr.getJSONObject(i)
-            Entry(
+            val allowed = o.optJSONArray("allowedLabels")?.let { a -> (0 until a.length()).map { a.getString(it) }.toSet() }
+            ModelInfo(
                 id = o.getString("id"),
-                name = o.optString("name", "YOLO26n"),
+                role = o.optString("role", "detector"),
+                name = o.optString("name", "YOLO"),
                 file = o.getString("file"),
                 format = o.getString("format"),
                 inputSize = o.optInt("inputSize", 640),
                 version = o.optString("version", "unknown"),
                 sha256 = o.getString("sha256").lowercase(),
                 source = o.optString("source", ""),
+                labelsFile = o.optString("labels", "").ifEmpty { null },
+                numClasses = o.optInt("numClasses", 0),
+                allowedLabels = allowed,
+                outputName = o.optString("outputName", "").ifEmpty { null },
+                priority = o.optInt("priority", 100),
             )
-        }
+        }.sortedBy { it.priority }
     }
 
-    /** Returns the verified on-disk model for [format] ("onnx-qnn" or "litert"), or throws with the reason. */
-    fun resolve(format: String): ModelFile {
-        val e = entries.firstOrNull { it.format == format }
-            ?: throw IllegalStateException("No $format model in model_manifest.json")
-        // Touch labels so the manifest's label file name is honoured.
-        labels
+    fun detectors(): List<ModelInfo> = entries.filter { it.role == "detector" }
+    fun depthModels(): List<ModelInfo> = entries.filter { it.role == "depth" }
+
+    fun labels(file: String): List<String> = labelCache.getOrPut(file) {
+        context.assets.open("models/$file").bufferedReader().readLines().map { it.trim() }.filter { it.isNotEmpty() }
+    }
+
+    /** Returns the verified on-disk model, or throws with the reason. */
+    fun resolve(e: ModelInfo): ModelFile {
+        val labels = e.labelsFile?.let { labels(it) } ?: emptyList()
+        if (e.role == "detector") {
+            require(labels.size == e.numClasses) { "${e.id}: ${labels.size} labels but numClasses=${e.numClasses}" }
+        }
 
         val override = File(File(baseDir, "override"), e.file)
         if (override.exists()) {
             val hash = Checksums.sha256(override)
             if (hash == e.sha256) {
                 Log.i(tag, "Using developer override for ${e.id} (hash verified)")
-                return e.toModelFile(override, true)
+                return e.toModelFile(override, labels)
             }
             Log.w(tag, "Ignoring override ${override.path}: sha256 $hash != manifest ${e.sha256}")
         }
@@ -104,7 +127,7 @@ class ModelManager(private val context: Context) {
         val dir = File(baseDir, e.version).apply { mkdirs() }
         val target = File(dir, e.file)
         if (target.exists()) {
-            if (Checksums.sha256(target) == e.sha256) return e.toModelFile(target, true)
+            if (Checksums.sha256(target) == e.sha256) return e.toModelFile(target, labels)
             Log.w(tag, "Cached ${target.name} failed verification; re-extracting")
             target.delete()
         }
@@ -122,11 +145,13 @@ class ModelManager(private val context: Context) {
             tmp.delete()
             throw IllegalStateException("Could not move ${e.file} into place")
         }
-        return e.toModelFile(target, true)
+        return e.toModelFile(target, labels)
     }
 
-    private fun Entry.toModelFile(f: File, verified: Boolean) =
-        ModelFile(id, name, format, f.absolutePath, inputSize, version, sha256, verified, source)
+    private fun ModelInfo.toModelFile(f: File, labels: List<String>) = ModelFile(
+        id, role, name, format, f.absolutePath, inputSize, version, sha256, true, source,
+        labels, numClasses, allowedLabels, outputName,
+    )
 }
 
 /** What this phone can accelerate on. */
@@ -144,7 +169,7 @@ object DeviceCapabilityManager {
 
     val htpArch: Int? get() = htpBySoc[socModel.uppercase()]
 
-    /** The bundled QNN model is compiled for v81 only. */
+    /** The bundled QNN models are compiled for v81 only. */
     fun supportsBundledQnn(): Boolean =
         htpArch == 81 && (File("/vendor/lib64/libcdsprpc.so").exists() || File("/system/vendor/lib64/libcdsprpc.so").exists())
 
