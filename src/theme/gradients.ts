@@ -11,25 +11,25 @@
 export type GradientStops = readonly [string, string, ...string[]];
 
 export const gradients = {
-  /** The signature cyan→magenta of the logo and primary CTA. */
-  brand: ['#4DA6FF', '#A855F7', '#EC4899'] as const,
+  /** The signature brand gradient. */
+  brand: ['#0A84FF', '#BF5AF2', '#FF375F'] as const,
   /** Shorter two-stop version for smaller controls. */
-  brandShort: ['#5B9DFF', '#C158E8'] as const,
+  brandShort: ['#0A84FF', '#BF5AF2'] as const,
 
-  /** Per-action tints from the icon row in the artwork. */
-  scan: ['#6366F1', '#8B5CF6'] as const,
-  capture: ['#C026D3', '#EC4899'] as const,
-  ar: ['#0EA5E9', '#22D3EE'] as const,
-  compose: ['#F97316', '#EF4444'] as const,
-  play: ['#22C55E', '#14B8A6'] as const,
+  /** Per-action tints. */
+  scan: ['#5E5CE6', '#BF5AF2'] as const,
+  capture: ['#BF5AF2', '#FF375F'] as const,
+  ar: ['#0A84FF', '#64D2FF'] as const,
+  compose: ['#FF9F0A', '#FF453A'] as const,
+  play: ['#30D158', '#5AC8FA'] as const,
 
   /** Transport-control surface: near-black with a subtle lift. */
-  control: ['#1A1D26', '#0E1016'] as const,
+  control: ['#1C1C1E', '#0C0C0E'] as const,
   /** Record button. */
-  record: ['#F43F5E', '#DC2626'] as const,
+  record: ['#FF453A', '#FF375F'] as const,
 
   /** Card surface behind object thumbnails. */
-  card: ['#161A24', '#0C0E14'] as const,
+  card: ['#1C1C1E', '#0C0C0E'] as const,
 } as const;
 
 /**

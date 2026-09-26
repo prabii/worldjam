@@ -39,6 +39,8 @@ export class Transport {
   /** Beat position up to which everything has already been scheduled. */
   private scheduledThroughBeat = 0;
   private playing = false;
+  /** Saved beat position for pause/resume. */
+  private pausedAtBeat = 0;
 
   private listeners = new Set<(s: TransportState) => void>();
 
@@ -94,15 +96,22 @@ export class Transport {
 
   /** Current position in beats since the transport started. */
   currentBeat(): number {
-    if (!this.playing) return 0;
+    if (!this.playing) return this.pausedAtBeat;
     return (currentFrame() - this.originFrame) / this.framesPerBeat;
   }
 
   start(): void {
     if (this.playing) return;
     this.playing = true;
-    this.originFrame = currentFrame();
-    this.scheduledThroughBeat = 0;
+
+    const now = currentFrame();
+    if (this.pausedAtBeat > 0) {
+      this.originFrame = now - Math.round(this.pausedAtBeat * this.framesPerBeat);
+      this.scheduledThroughBeat = this.pausedAtBeat;
+    } else {
+      this.originFrame = now;
+      this.scheduledThroughBeat = 0;
+    }
 
     this.tick();
     this.timer = setInterval(() => this.tick(), TICK_MS);
@@ -114,8 +123,15 @@ export class Transport {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.pausedAtBeat = this.playing ? this.currentBeat() : this.pausedAtBeat;
     this.playing = false;
-    this.scheduledThroughBeat = 0;
+    this.emit();
+  }
+
+  /** Stops and resets position to zero. */
+  reset(): void {
+    this.stop();
+    this.pausedAtBeat = 0;
     this.emit();
   }
 

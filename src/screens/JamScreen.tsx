@@ -17,10 +17,10 @@ import { LyricDisplay } from '@/components/LyricDisplay';
 import { QuantizePanel } from '@/components/QuantizePanel';
 import { RhythmGuide } from '@/components/RhythmGuide';
 import { BeatGridPanel } from '@/components/BeatGridPanel';
+import { FrequencyVisualizer } from '@/components/FrequencyVisualizer';
 import { gridHitCount } from '@/audio/beatGrid';
 import { TrackPlayer } from '@/components/TrackPlayer';
 import { TransportBar } from '@/components/TransportBar';
-import { VibeGrid } from '@/components/VibeGrid';
 import { Waveform } from '@/components/Waveform';
 import {
   getModelStatus,
@@ -45,6 +45,7 @@ export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture
   const [showQuantize, setShowQuantize] = useState(false);
   const [saving, setSaving] = useState(false);
   const [saveName, setSaveName] = useState('');
+  const [prompt, setPrompt] = useState('');
   const [modelStatus, setModelStatus] = useState<ModelStatus>(getModelStatus());
 
   useEffect(() => subscribeModelStatus(setModelStatus), []);
@@ -61,10 +62,19 @@ export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture
     <View style={styles.root}>
       <View style={[styles.top, { paddingTop: insets.top + spacing.sm }]}>
         <Pressable onPress={onBack} accessibilityRole="button" style={styles.back}>
-          <Text style={styles.backText}>‹ Capture</Text>
+          <Text style={styles.backChevron}>{'‹'}</Text>
+          <Text style={styles.backText}>Back</Text>
         </Pressable>
+        <Text style={styles.screenTitle}>Studio</Text>
         <LatencyBadge compact />
       </View>
+
+      {/* Frequency visualizer — shows when playing */}
+      {s.playing && (
+        <View style={styles.vizWrap}>
+          <FrequencyVisualizer playing={s.playing} barCount={40} height={36} color={colors.vibe} />
+        </View>
+      )}
 
       <ScrollView
         contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 150 }]}
@@ -216,10 +226,62 @@ export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture
           </View>
         )}
 
-        {/* --- vibes (panel 7) --- */}
+        {/* --- prompt-based beat generator --- */}
         <View style={styles.sectionPad}>
-          <View style={styles.vibeCard}>
-            <VibeGrid active={s.style} busy={s.arranging} onSelect={s.applyStyle} />
+          <View style={styles.promptCard}>
+            <Text style={styles.promptTitle}>Describe your beat</Text>
+            <Text style={styles.promptHint}>
+              Tell the AI what vibe you want — it'll arrange your sounds to match.
+            </Text>
+            <TextInput
+              value={prompt}
+              onChangeText={setPrompt}
+              placeholder="e.g. lo-fi chill with heavy bass, fast EDM drop..."
+              placeholderTextColor={colors.textFaint}
+              style={styles.promptInput}
+              multiline
+              maxLength={200}
+              editable={!s.arranging}
+              accessibilityLabel="Beat description"
+            />
+            <View style={styles.promptActions}>
+              <Pressable
+                onPress={() => {
+                  const instruction = prompt.trim();
+                  if (instruction) {
+                    void s.arrange(instruction);
+                  } else {
+                    void s.arrange();
+                  }
+                }}
+                disabled={s.arranging || s.objects.length === 0}
+                style={[
+                  styles.promptGenBtn,
+                  (s.arranging || s.objects.length === 0) && styles.promptGenBtnDisabled,
+                ]}
+              >
+                {s.arranging ? (
+                  <ActivityIndicator color="#FFFFFF" size="small" />
+                ) : (
+                  <Text style={styles.promptGenText}>
+                    {prompt.trim() ? '✦ Generate' : '✦ Auto Arrange'}
+                  </Text>
+                )}
+              </Pressable>
+              {prompt.trim().length > 0 && (
+                <Pressable
+                  onPress={() => setPrompt('')}
+                  style={styles.promptClearBtn}
+                >
+                  <Text style={styles.promptClearText}>Clear</Text>
+                </Pressable>
+              )}
+            </View>
+            {s.lastPlanInfo && (
+              <Text style={styles.promptResult} numberOfLines={2}>
+                Last: {s.lastPlanInfo}
+              </Text>
+            )}
           </View>
         </View>
 
@@ -349,10 +411,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: spacing.lg,
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.sm,
   },
-  back: { paddingVertical: spacing.sm, paddingRight: spacing.md },
-  backText: { ...type.label, color: colors.textDim },
+  back: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.sm,
+    paddingRight: spacing.md,
+    gap: 2,
+  },
+  backChevron: { fontSize: 22, fontWeight: '300', color: colors.vibe, marginTop: -1 },
+  backText: { ...type.body, color: colors.vibe },
+  screenTitle: { ...type.title, color: colors.text, flex: 1, textAlign: 'center' },
+  vizWrap: {
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.sm,
+  },
   scroll: { gap: spacing.lg },
   sectionPad: { paddingHorizontal: spacing.lg },
 
@@ -375,20 +449,67 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: spacing.lg,
     borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSolid,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surface,
   },
   vocalInfo: { flex: 1, gap: 4 },
   vocalTitle: { ...type.label, color: colors.text },
   vocalMeta: { ...type.caption, color: colors.textDim, fontWeight: '500' },
 
-  vibeCard: {
+  promptCard: {
     padding: spacing.lg,
     borderRadius: radius.lg,
+    backgroundColor: colors.surfaceSolid,
     borderWidth: 1,
     borderColor: colors.border,
-    backgroundColor: colors.surface,
+    gap: spacing.md,
+  },
+  promptTitle: { ...type.label, fontSize: 15, color: colors.text },
+  promptHint: { ...type.caption, color: colors.textDim, lineHeight: 16 },
+  promptInput: {
+    ...type.body,
+    color: colors.text,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.md,
+    backgroundColor: 'rgba(255,255,255,0.04)',
+    borderWidth: 1,
+    borderColor: colors.border,
+    minHeight: 56,
+    textAlignVertical: 'top',
+  },
+  promptActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  promptGenBtn: {
+    flex: 1,
+    paddingVertical: 14,
+    borderRadius: radius.md,
+    backgroundColor: colors.ai,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 48,
+  },
+  promptGenBtnDisabled: {
+    backgroundColor: colors.surfaceRaised,
+  },
+  promptGenText: { ...type.label, color: '#FFFFFF', fontSize: 14 },
+  promptClearBtn: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 14,
+    borderRadius: radius.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  promptClearText: { ...type.label, color: colors.textDim },
+  promptResult: {
+    ...type.caption,
+    color: colors.ai,
+    lineHeight: 16,
   },
 
   disclosure: {
@@ -408,15 +529,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     gap: spacing.sm,
-    backgroundColor: 'rgba(8,9,12,0.94)',
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
+    backgroundColor: 'rgba(0,0,0,0.92)',
   },
 
 
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.75)',
+    backgroundColor: 'rgba(0,0,0,0.6)',
     alignItems: 'center',
     justifyContent: 'center',
     padding: spacing.xl,
@@ -424,39 +543,36 @@ const styles = StyleSheet.create({
   modalCard: {
     width: '100%',
     padding: spacing.xl,
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     backgroundColor: colors.surfaceSolid,
     borderWidth: 1,
     borderColor: colors.border,
-    gap: spacing.md,
+    gap: spacing.lg,
   },
-  modalTitle: { ...type.title, color: colors.text },
+  modalTitle: { ...type.title, fontSize: 18, color: colors.text },
   modalInput: {
     ...type.body,
     color: colors.text,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
+    paddingVertical: 14,
+    paddingHorizontal: spacing.lg,
     borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.borderStrong,
-    backgroundColor: colors.bg,
+    backgroundColor: 'rgba(255,255,255,0.06)',
   },
-  modalButtons: { flexDirection: 'row', gap: spacing.md },
+  modalButtons: { flexDirection: 'row', gap: spacing.md, marginTop: spacing.sm },
   modalCancel: {
     flex: 1,
-    paddingVertical: spacing.md,
+    paddingVertical: 14,
     alignItems: 'center',
     borderRadius: radius.md,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: colors.surfaceRaised,
   },
   modalCancelText: { ...type.label, color: colors.textDim },
   modalSave: {
     flex: 2,
-    paddingVertical: spacing.md,
+    paddingVertical: 14,
     alignItems: 'center',
     borderRadius: radius.md,
     backgroundColor: colors.vibe,
   },
-  modalSaveText: { ...type.label, color: colors.bg },
+  modalSaveText: { ...type.label, color: '#FFFFFF' },
 });
