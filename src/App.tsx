@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
-import { PermissionsAndroid, Platform, StyleSheet, Text, View } from 'react-native';
+import { PermissionsAndroid, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { useKeepAwake } from 'expo-keep-awake';
 import { WelcomeScreen } from '@/screens/WelcomeScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
@@ -9,11 +9,12 @@ import { CaptureScreen } from '@/screens/CaptureScreen';
 import { BottomNav, type NavTab } from '@/components/ui/BottomNav';
 import { useSession } from '@/state/sessionStore';
 import { JamScreen } from '@/screens/JamScreen';
+import { VisionScreen } from '@/vision/screens/VisionScreen';
 import { nativeAvailable, startEngine, stopEngine } from '@/audio/engine';
 import { initModel, releaseModel } from '@/ai/modelLoader';
 import { colors, spacing, type } from '@/theme';
 
-type Screen = 'welcome' | 'home' | 'capture' | 'jam';
+type Screen = 'welcome' | 'home' | 'capture' | 'jam' | 'vision';
 
 export default function App() {
   // A demo dies if the screen sleeps mid-jam.
@@ -98,13 +99,28 @@ export default function App() {
           />
         ) : screen === 'capture' ? (
           <CaptureScreen onDone={() => setScreen('jam')} />
+        ) : screen === 'vision' ? (
+          <VisionScreen onBack={() => setScreen('home')} />
         ) : (
           <JamScreen onBack={() => setScreen('home')} />
         )}
 
         {/* Nav is hidden on the welcome screen, which is a full-bleed
             standalone moment rather than part of the tabbed app. */}
-        {screen !== 'welcome' && screen !== 'capture' && (
+        {/* Vision (object read-out) entry. Rendered here so no music screen changes. */}
+        {screen === 'home' && (
+          <Pressable
+            onPress={() => setScreen('vision')}
+            accessibilityRole="button"
+            accessibilityLabel="Object Guide"
+            accessibilityHint="Opens the camera and describes objects aloud"
+            style={[styles.visionEntry, { top: (initialWindowMetrics?.insets.top ?? 24) + 14 }]}
+          >
+            <Text style={styles.visionEntryText}>👁 Object Guide</Text>
+          </Pressable>
+        )}
+
+        {screen !== 'welcome' && screen !== 'capture' && screen !== 'vision' && (
           <BottomNav
             active={screen === 'home' ? 'home' : 'studio'}
             onSelect={(t) => setScreen(t === 'home' ? 'home' : 'jam')}
@@ -136,4 +152,14 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(248,113,113,0.92)',
   },
   bannerText: { ...type.caption, color: '#1A0B0B', fontWeight: '700' },
+  visionEntry: {
+    position: 'absolute',
+    right: spacing.lg,
+    minHeight: 48,
+    justifyContent: 'center',
+    paddingHorizontal: spacing.lg,
+    borderRadius: 24,
+    backgroundColor: colors.vibe,
+  },
+  visionEntryText: { ...type.label, fontSize: 15, color: colors.bg, fontWeight: '800' },
 });
