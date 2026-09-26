@@ -130,13 +130,18 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
     const n = objects.length;
     const golden = 2.399963; // radians
     const radius = 0.13 + 0.055 * Math.sqrt(n);
-    const detectedSpot =
+    const detectedCenter =
       target?.bbox && stage.width > 0
         ? coverMap(stage.width, stage.height, frameAspect).pointToView(
             target.bbox.x + target.bbox.width / 2,
             target.bbox.y + target.bbox.height / 2,
           )
         : null;
+    // Keep the pinned label clear of the header above and the record controls below.
+    const detectedSpot = detectedCenter && {
+      x: Math.min(0.85, Math.max(0.15, detectedCenter.x)),
+      y: Math.min(0.68, Math.max(0.22, detectedCenter.y)),
+    };
     const spot = nextSpot.current ??
       detectedSpot ?? {
         x: 0.5 + Math.cos(n * golden) * radius,

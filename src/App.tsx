@@ -1,5 +1,13 @@
 import React, { useEffect, useState } from 'react';
-import { PermissionsAndroid, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import {
+  BackHandler,
+  PermissionsAndroid,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider, initialWindowMetrics } from 'react-native-safe-area-context';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -27,6 +35,17 @@ export default function App() {
   const [screen, setScreen] = useState<Screen>('welcome');
   const openSession = useSession((s) => s.openSession);
   const [engineError, setEngineError] = useState<string | null>(null);
+
+  // Android Back returns to Home from any inner screen instead of closing the
+  // app (and losing the unsaved session). Home and Welcome keep the default.
+  useEffect(() => {
+    if (screen === 'home' || screen === 'welcome') return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setScreen('home');
+      return true;
+    });
+    return () => sub.remove();
+  }, [screen]);
 
   useEffect(() => {
     let cancelled = false;

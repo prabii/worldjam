@@ -77,7 +77,7 @@ export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture
       )}
 
       <ScrollView
-        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 150 }]}
+        contentContainerStyle={[styles.scroll, { paddingBottom: insets.bottom + 150 + NAV_CLEARANCE }]}
         showsVerticalScrollIndicator={false}
       >
         {/* --- the step grid: one row per captured sound, the user's own beat --- */}
@@ -390,7 +390,7 @@ export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture
         </View>
       </Modal>
 
-      <View style={[styles.transportWrap, { paddingBottom: insets.bottom + spacing.md }]}>
+      <View style={[styles.transportWrap, { paddingBottom: insets.bottom + NAV_CLEARANCE }]}>
         <TransportBar
           playing={s.playing}
           armed={s.armed}
@@ -403,6 +403,9 @@ export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture
     </View>
   );
 }
+
+/** The bottom nav (bar + raised capture button) overlays this screen; keep the transport above it. */
+const NAV_CLEARANCE = 90;
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: colors.bg },
