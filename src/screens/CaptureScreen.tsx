@@ -11,7 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { useCameraPermission } from 'react-native-vision-camera';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { ARObjectLabel } from '@/components/ARObjectLabel';
@@ -22,6 +22,12 @@ import { describeScene } from '@/audio/guidance';
 import { speakNow } from '@/audio/speech';
 import { useSession } from '@/state/sessionStore';
 import { colors, radius, spacing, type } from '@/theme';
+import { WorldCameraView } from '@/vision/components/WorldCameraView';
+import { VisionDetectionOverlay } from '@/vision/components/VisionDetectionOverlay';
+import { MultiObjectNotice } from '@/vision/components/MultiObjectNotice';
+import { useCaptureTarget } from '@/vision/hooks/useCaptureTarget';
+import { coverMap } from '@/vision/geometry';
+import { multipleObjectsMessage, namingFor, noticeKey } from '@/vision/captureNaming';
 
 /**
  * Capture screen — panels 1 and 2 of the product mockups.
@@ -31,16 +37,28 @@ import { colors, radius, spacing, type } from '@/theme';
  * "Mug / Laptop / Keys" before any audio exists reads as though the app ships
  * with those instruments — the opposite of the product's promise that every
  * sound is one you recorded.
+ *
+ * On-device detection (modules/worldjam-vision, capture mode) finds the object
+ * closest to the camera -- or the one the user taps -- and names the capture
+ * after it; the naming popup opens pre-filled so the name can be kept or edited.
  */
 export function CaptureScreen({ onDone }: { onDone: () => void }) {
   const insets = useSafeAreaInsets();
-  const [permission, requestPermission] = useCameraPermissions();
+  const { hasPermission, requestPermission } = useCameraPermission();
   const [stage, setStage] = useState({ width: 0, height: 0 });
   const [elapsed, setElapsed] = useState(0);
+  const [frameAspect, setFrameAspect] = useState(9 / 16);
 
-  /** Set after a capture, while the user names it. */
-  const [naming, setNaming] = useState<{ id: string } | null>(null);
+  /**
+   * Set after a capture (or from the edit button), while the user names it.
+   * `detected` is the name vision suggested, shown so the user knows its source.
+   */
+  const [naming, setNaming] = useState<{ id: string; detected: string | null; rename: boolean } | null>(null);
   const [nameDraft, setNameDraft] = useState('');
+
+  // Closest-object detection for naming captures.
+  const vision = useCaptureTarget(true);
+  const captureNaming = useRef(namingFor(null));
 
   // Where the next capture anchors — set by tapping the camera view.
   const nextSpot = useRef<{ x: number; y: number } | null>(null);
@@ -59,7 +77,7 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
   const guidanceOn = useSession((s) => s.guidanceOn);
   const setGuidance = useSession((s) => s.setGuidance);
 
-  const ar = useArTracking(!!permission?.granted, stage.width, stage.height);
+  const ar = useArTracking(hasPermission, stage.width, stage.height);
 
   const isRecording = recording?.kind === 'object';
 
@@ -86,9 +104,12 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
       const y = e.nativeEvent.locationY / stage.height;
       nextSpot.current = { x, y };
       setMarker({ x, y });
+      // The tapped object becomes the one the next capture is named after.
+      const f = coverMap(stage.width, stage.height, frameAspect).pointToFrame(x, y);
+      vision.focus(f.x, f.y);
       Haptics.selectionAsync().catch(() => {});
     },
-    [stage, isRecording],
+    [stage, isRecording, frameAspect, vision],
   );
 
   const handleRecordStart = useCallback(() => {
@@ -99,25 +120,41 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
     // clustering them. An earlier version reused nextSpot.current without
     // clearing it, so every auto-placed object landed on the same point and
     // the labels stacked.
+    //
+    // Frozen now: once the hand strikes the object it may hide it from the
+    // camera, so the name and position come from the moment recording began.
+    const target = vision.snapshot();
+    const naming = namingFor(target);
+    captureNaming.current = naming;
+
     const n = objects.length;
     const golden = 2.399963; // radians
     const radius = 0.13 + 0.055 * Math.sqrt(n);
-    const spot = nextSpot.current ?? {
-      x: 0.5 + Math.cos(n * golden) * radius,
-      y: 0.42 + Math.sin(n * golden) * radius * 0.8,
-    };
+    const detectedSpot =
+      target?.bbox && stage.width > 0
+        ? coverMap(stage.width, stage.height, frameAspect).pointToView(
+            target.bbox.x + target.bbox.width / 2,
+            target.bbox.y + target.bbox.height / 2,
+          )
+        : null;
+    const spot = nextSpot.current ??
+      detectedSpot ?? {
+        x: 0.5 + Math.cos(n * golden) * radius,
+        y: 0.42 + Math.sin(n * golden) * radius * 0.8,
+      };
     nextSpot.current = spot;
 
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy).catch(() => {});
     beginCapture({
       kind: 'object',
-      // Placeholder only; the user names it after hearing it.
-      label: `Sound ${objects.length + 1}`,
-      category: 'unknown',
+      // The detected object's name, or 'Object' so the store names it from
+      // its sound. Either way the user can keep or edit it afterwards.
+      label: naming.label,
+      category: naming.category,
       x: spot.x,
       y: spot.y,
     });
-  }, [beginCapture, objects.length]);
+  }, [beginCapture, objects.length, vision, stage, frameAspect]);
 
   const handleRecordStop = useCallback(async () => {
     const spot = nextSpot.current;
@@ -130,34 +167,66 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
       if (spot && ar.supported && ar.tracking && stage.width > 0) {
         ar.createAnchor(added.id, spot.x * stage.width, spot.y * stage.height);
       }
-      // Name it now that there is a sound to name.
-      setNameDraft('');
-      setNaming({ id: added.id });
+      // Pre-filled with the detected (or sound-derived) name: Save keeps it,
+      // editing renames it.
+      const n = captureNaming.current;
+      setNameDraft(added.label);
+      setNaming({ id: added.id, detected: n.fromDetection ? added.label : null, rename: false });
     }
 
     nextSpot.current = null;
     setMarker(null);
-  }, [ar, finishCapture, stage]);
+    vision.clearFocus();
+  }, [ar, finishCapture, stage, vision]);
 
   const commitName = useCallback(() => {
     if (!naming) return;
     const name = nameDraft.trim();
-    if (name) renameObject(naming.id, name);
+    const current = useSession.getState().objects.find((o) => o.id === naming.id)?.label;
+    if (name && name !== current) renameObject(naming.id, name);
     setNaming(null);
     setNameDraft('');
   }, [naming, nameDraft, renameObject]);
 
+  /** Edit button on a captured sound: rename it any time. */
+  const openRename = useCallback((id: string, label: string) => {
+    setNameDraft(label);
+    setNaming({ id, detected: null, rename: true });
+  }, []);
+
+  // Several objects in view: a 3 s notice, spoken only when voice guidance is
+  // on -- and never while recording, where it would end up in the sample.
+  const notice = multipleObjectsMessage(vision.target);
+  const key = isRecording || naming ? null : noticeKey(vision.target);
+  const spokenKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!key || !notice || key === spokenKey.current) return;
+    spokenKey.current = key;
+    if (guidanceOn) speakNow(notice);
+  }, [key, notice, guidanceOn]);
+
   const lastObject = objects[objects.length - 1];
-  const cameraDenied = permission != null && !permission.granted;
+  const cameraDenied = !hasPermission;
+  const target = vision.target;
 
   return (
     <View style={styles.root}>
       {/* --- camera stage --- */}
       <Pressable style={styles.stage} onPress={handleStagePress} onLayout={onStageLayout}>
-        {permission?.granted ? (
-          <CameraView style={StyleSheet.absoluteFill} facing="back" />
+        {hasPermission ? (
+          <WorldCameraView active onFrameAspect={setFrameAspect} />
         ) : (
           <View style={[StyleSheet.absoluteFill, styles.noCamera]} />
+        )}
+
+        {hasPermission && (
+          <VisionDetectionOverlay
+            objects={vision.objects}
+            frameAspect={frameAspect}
+            highlightTrackId={target?.trackId ?? null}
+            highlightTag={target?.method === 'tap' ? 'selected' : 'closest'}
+            labelMinTop={insets.top + 120}
+          />
         )}
 
         {stage.width > 0 &&
@@ -254,6 +323,10 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
         </Pressable>
       </View>
 
+      <View style={styles.noticeRow} pointerEvents="none">
+        <MultiObjectNotice message={notice} noticeKey={key} />
+      </View>
+
       {cameraDenied && (
         <Pressable onPress={requestPermission} style={styles.permission}>
           <Text style={styles.permissionText}>
@@ -292,13 +365,33 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
                 <View style={styles.playSmallIcon} />
               </View>
             </View>
-            <Text style={styles.capturedSub}>
-              Real sound from your {lastObject.label.toLowerCase()}
-            </Text>
+            <View style={styles.capturedFooter}>
+              <Text style={[styles.capturedSub, { flex: 1 }]}>
+                Real sound from your {lastObject.label.toLowerCase()}
+              </Text>
+              <Pressable
+                onPress={() => openRename(lastObject.id, lastObject.label)}
+                accessibilityRole="button"
+                accessibilityLabel={`Rename ${lastObject.label}`}
+                hitSlop={10}
+                style={styles.editChip}
+              >
+                <Text style={styles.editChipText}>✎ Edit name</Text>
+              </Pressable>
+            </View>
           </Pressable>
         ) : (
           <Text style={styles.recordHint}>
-            {marker ? 'Placed — now hold to record' : 'Tap where the object is'}
+            {target?.spokenLabel
+              ? `${target.method === 'tap' ? 'Selected' : 'Closest'}: ${target.spokenLabel} — hold & hit it`
+              : marker
+                ? 'Placed — now hold to record'
+                : 'Point at an object, or tap it'}
+          </Text>
+        )}
+        {!isRecording && lastObject && target?.spokenLabel && (
+          <Text style={styles.recordHint}>
+            Next: {target.spokenLabel} ({target.method === 'tap' ? 'selected' : 'closest'})
           </Text>
         )}
 
@@ -333,9 +426,19 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
                 accessibilityLabel={`Play ${o.label}`}
                 style={[styles.stripItem, { borderColor: o.color }]}
               >
-                <Text style={[styles.stripName, { color: o.color }]} numberOfLines={1}>
-                  {o.label}
-                </Text>
+                <View style={styles.stripHead}>
+                  <Text style={[styles.stripName, { color: o.color }]} numberOfLines={1}>
+                    {o.label}
+                  </Text>
+                  <Pressable
+                    onPress={() => openRename(o.id, o.label)}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Rename ${o.label}`}
+                    hitSlop={8}
+                  >
+                    <Text style={[styles.stripEdit, { color: o.color }]}>✎</Text>
+                  </Pressable>
+                </View>
                 <Waveform
                   pcm={pcmBySlot.get(o.slot) ?? null}
                   width={56}
@@ -401,9 +504,17 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
       <Modal visible={naming != null} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>What did you just hit?</Text>
+            <Text style={styles.modalTitle}>
+              {naming?.rename
+                ? 'Rename this sound'
+                : naming?.detected
+                  ? `Detected: ${naming.detected}`
+                  : 'What did you just hit?'}
+            </Text>
             <Text style={styles.modalSub}>
-              Name it so the AI can call it out in the rhythm.
+              {naming?.detected
+                ? 'Named from the camera. Keep it, or edit it if that is not what you hit.'
+                : 'Name it so the AI can call it out in the rhythm.'}
             </Text>
             <TextInput
               value={nameDraft}
@@ -417,10 +528,20 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
               accessibilityLabel="Object name"
             />
             <View style={styles.modalButtons}>
-              <Pressable onPress={() => setNaming(null)} style={styles.modalSkip}>
-                <Text style={styles.modalSkipText}>Skip</Text>
+              <Pressable
+                onPress={() => setNaming(null)}
+                accessibilityRole="button"
+                accessibilityLabel={naming?.rename ? 'Cancel rename' : 'Keep the current name'}
+                style={styles.modalSkip}
+              >
+                <Text style={styles.modalSkipText}>{naming?.rename ? 'Cancel' : 'Skip'}</Text>
               </Pressable>
-              <Pressable onPress={commitName} style={styles.modalSave}>
+              <Pressable
+                onPress={commitName}
+                accessibilityRole="button"
+                accessibilityLabel="Save name"
+                style={styles.modalSave}
+              >
                 <Text style={styles.modalSaveText}>Save</Text>
               </Pressable>
             </View>
@@ -622,7 +743,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surfaceRaised,
     minWidth: 70,
   },
-  stripName: { ...type.caption, fontSize: 10 },
+  stripName: { ...type.caption, fontSize: 10, flexShrink: 1 },
+  stripHead: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: 96 },
+  stripEdit: { fontSize: 13, fontWeight: '800', paddingHorizontal: 2 },
+  capturedFooter: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+  editChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.vibe,
+  },
+  editChipText: { ...type.caption, color: colors.vibe, fontWeight: '800' },
+  noticeRow: { marginTop: spacing.sm, alignItems: 'center' },
 
   actionRow: { width: '100%', gap: spacing.sm },
   secondaryButton: {

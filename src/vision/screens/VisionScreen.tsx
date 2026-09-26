@@ -41,7 +41,7 @@ export function VisionScreen({ onBack }: { onBack: () => void }) {
     <View style={styles.root}>
       <View style={styles.stage}>
         <WorldCameraView active onFrameAspect={onFrameAspect} />
-        <VisionDetectionOverlay objects={v.state.objects} frameAspect={frameAspect} />
+        <VisionDetectionOverlay objects={v.state.objects} frameAspect={frameAspect} labelMinTop={insets.top + 64} />
         <View style={[styles.top, { paddingTop: insets.top + 8 }]}>
           <Pressable
             onPress={onBack}

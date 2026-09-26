@@ -64,8 +64,10 @@ export function useWorldVision({ active, gemmaRuntime, diagnosticsEnabled = fals
   useEffect(() => {
     if (!isWorldVisionAvailable) return;
     const apply = (fg: boolean) => {
-      if (active && fg) WorldVision.startDetection();
-      else WorldVision.stopDetection();
+      if (active && fg) {
+        WorldVision.setMode('guide');
+        WorldVision.startDetection();
+      } else WorldVision.stopDetection();
     };
     apply(AppState.currentState === 'active');
     const sub = AppState.addEventListener('change', (s) => apply(s === 'active'));
