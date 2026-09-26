@@ -25,8 +25,13 @@ interface Props {
   /** Set true for one frame to capture the reticle contents as the signature. */
   capturing: boolean;
   onCalibrated: (sig: FootSignature) => void;
-  /** Fired once per foot-plant, with the lane it landed in. */
-  onStamp: (lane: Lane) => void;
+  /**
+   * Fired once per foot-plant, with the lane it landed in.
+   *
+   * Optional: the whack-a-mole game needs nine cells rather than three
+   * lanes, so it reads `onReading` and runs its own edge detection instead.
+   */
+  onStamp?: (lane: Lane) => void;
   /** Continuous position, for the on-screen tracking dot. */
   onReading: (reading: FootReading) => void;
 }
@@ -97,7 +102,7 @@ export function FootCamera({
         onReading(reading);
 
         const lane = stamps.push(reading, Date.now());
-        if (lane != null) onStamp(lane);
+        if (lane != null) onStamp?.(lane);
       }),
     [onCalibrated, onReading, onStamp, stamps],
   );

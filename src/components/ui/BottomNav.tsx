@@ -8,7 +8,15 @@ import { colors, radius, spacing, type } from '@/theme';
 
 export type NavTab = 'home' | 'studio' | 'play' | 'profile';
 
-export type AppScreen = 'welcome' | 'home' | 'capture' | 'jam' | 'jams' | 'play' | 'profile';
+export type AppScreen =
+  | 'welcome'
+  | 'home'
+  | 'capture'
+  | 'jam'
+  | 'jams'
+  | 'play'
+  | 'whack'
+  | 'profile';
 
 interface Props {
   active: NavTab;

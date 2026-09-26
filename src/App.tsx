@@ -9,6 +9,7 @@ import { CaptureScreen } from '@/screens/CaptureScreen';
 import { JamScreen } from '@/screens/JamScreen';
 import { JamsScreen } from '@/screens/JamsScreen';
 import { PlayScreen } from '@/screens/PlayScreen';
+import { WhackScreen } from '@/screens/WhackScreen';
 import { ProfileScreen } from '@/screens/ProfileScreen';
 import { BottomNav, type AppScreen, type NavTab } from '@/components/ui/BottomNav';
 import { useSession } from '@/state/sessionStore';
@@ -75,7 +76,7 @@ export default function App() {
   const activeTab: NavTab =
     screen === 'home' || screen === 'jams' ? 'home' :
     screen === 'profile' ? 'profile' :
-    screen === 'play' ? 'play' :
+    screen === 'play' || screen === 'whack' ? 'play' :
     'studio';
 
   const navSelect = (t: NavTab) => {
@@ -85,7 +86,11 @@ export default function App() {
     else setScreen('jam');
   };
 
-  const showNav = screen !== 'welcome' && screen !== 'capture' && screen !== 'play';
+  const showNav =
+    screen !== 'welcome' &&
+    screen !== 'capture' &&
+    screen !== 'play' &&
+    screen !== 'whack';
 
   return (
     <SafeAreaProvider>
@@ -118,7 +123,12 @@ export default function App() {
             onNewJam={() => setScreen('capture')}
           />
         ) : screen === 'play' ? (
-          <PlayScreen onBack={() => setScreen('home')} />
+          <PlayScreen
+            onBack={() => setScreen('home')}
+            onWhack={() => setScreen('whack')}
+          />
+        ) : screen === 'whack' ? (
+          <WhackScreen onBack={() => setScreen('home')} />
         ) : screen === 'profile' ? (
           <ProfileScreen onBack={() => setScreen('home')} />
         ) : (

@@ -26,6 +26,8 @@ import type { SessionSummary } from '@/state/sessionStorage';
 
 interface Props {
   onBack: () => void;
+  /** Switches to the whack-a-mole game, played with the hand. */
+  onWhack?: () => void;
 }
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
@@ -101,7 +103,7 @@ const LANE_PALETTE = [
   { base: '#BF5AF2', soft: 'rgba(191,90,242,0.22)', glow: 'rgba(191,90,242,0.45)' },
 ];
 
-export function PlayScreen({ onBack }: Props) {
+export function PlayScreen({ onBack, onWhack }: Props) {
   const insets = useSafeAreaInsets();
 
   const objects = useSession((s) => s.objects);
@@ -607,6 +609,14 @@ export function PlayScreen({ onBack }: Props) {
           <Text style={styles.setupSub}>
             {playerName || 'Player'} — what should the tiles fall to?
           </Text>
+
+          {onWhack && (
+            <Pressable onPress={onWhack} style={styles.modeSwitch}>
+              <Text style={styles.modeSwitchText}>
+                ✋ Play whack-a-mole with your hand instead →
+              </Text>
+            </Pressable>
+          )}
 
           <Pressable
             onPress={() => {
@@ -1250,6 +1260,17 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.03)',
   },
   srcCardOn: { borderColor: colors.vibe, backgroundColor: 'rgba(10,132,255,0.08)' },
+  modeSwitch: {
+    width: '100%',
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: 'rgba(191,90,242,0.45)',
+    backgroundColor: 'rgba(191,90,242,0.1)',
+    alignItems: 'center',
+  },
+  modeSwitchText: { ...type.label, fontSize: 13, color: colors.ai },
   srcCardOff: { opacity: 0.45 },
   srcIcon: {
     width: 52,
