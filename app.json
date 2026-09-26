@@ -41,6 +41,7 @@
             "compileSdkVersion": 35,
             "targetSdkVersion": 35,
             "extraProguardRules": "",
+            "useLegacyPackaging": true,
             "packagingOptions": {
               "pickFirst": [
                 "**/libc++_shared.so"
