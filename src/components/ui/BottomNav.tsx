@@ -8,17 +8,6 @@ import { colors, radius, spacing, type } from '@/theme';
 
 export type NavTab = 'home' | 'studio' | 'jams' | 'profile';
 
-/**
- * Space a scrolling screen must leave at its bottom so the nav does not cover
- * the last row of content.
- *
- * The bar is absolutely positioned and its raised centre button sits above
- * it, so the clearance is taller than the bar itself. Exported as one constant
- * because six screens were each carrying their own guess, and the first one to
- * be wrong hides real content behind the nav.
- */
-export const BOTTOM_NAV_CLEARANCE = 150;
-
 interface Props {
   active: NavTab;
   onSelect: (tab: NavTab) => void;

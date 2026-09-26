@@ -6,12 +6,6 @@ import { useKeepAwake } from 'expo-keep-awake';
 import { WelcomeScreen } from '@/screens/WelcomeScreen';
 import { HomeScreen } from '@/screens/HomeScreen';
 import { CaptureScreen } from '@/screens/CaptureScreen';
-import { ScanScreen } from '@/screens/ScanScreen';
-import { ObjectDetailScreen } from '@/screens/ObjectDetailScreen';
-import { MyJamsScreen } from '@/screens/MyJamsScreen';
-import { CreateJamScreen } from '@/screens/CreateJamScreen';
-import { TrackDetailScreen } from '@/screens/TrackDetailScreen';
-import { ProfileScreen } from '@/screens/ProfileScreen';
 import { BottomNav, type NavTab } from '@/components/ui/BottomNav';
 import { useSession } from '@/state/sessionStore';
 import { JamScreen } from '@/screens/JamScreen';
@@ -19,35 +13,13 @@ import { nativeAvailable, startEngine, stopEngine } from '@/audio/engine';
 import { initModel, releaseModel } from '@/ai/modelLoader';
 import { colors, spacing, type } from '@/theme';
 
-/**
- * The screens, in the order the four-step bar promises:
- *
- *   scan (1) -> studio (2, 3) -> track (4)
- *
- * 'object' is a detour off scan for one sound's settings, 'create' is the
- * guided alternative to the studio, and 'jams' is the library. There is
- * deliberately no separate 'jam' route any more: it and 'track' were two
- * studios with no stated relationship, and "back" from one led to a screen the
- * user had never visited.
- */
-type Screen =
-  | 'welcome'
-  | 'home'
-  | 'scan'
-  | 'object'
-  | 'studio'
-  | 'create'
-  | 'track'
-  | 'jams'
-  | 'profile';
+type Screen = 'welcome' | 'home' | 'capture' | 'jam';
 
 export default function App() {
   // A demo dies if the screen sleeps mid-jam.
   useKeepAwake();
 
   const [screen, setScreen] = useState<Screen>('welcome');
-  /** Which object the detail screen is showing. */
-  const [objectId, setObjectId] = useState<string | null>(null);
   const openSession = useSession((s) => s.openSession);
   const [engineError, setEngineError] = useState<string | null>(null);
 
@@ -117,85 +89,27 @@ export default function App() {
           />
         ) : screen === 'home' ? (
           <HomeScreen
-            onScan={() => setScreen('scan')}
-            onCompose={() => setScreen('create')}
+            onScan={() => setScreen('capture')}
+            onCompose={() => setScreen('jam')}
             onOpenSession={async (id) => {
               await openSession(id);
-              setScreen('track');
+              setScreen('jam');
             }}
           />
-        ) : screen === 'scan' ? (
-          /* Step 1. "Add to Studio" carries EVERY captured object forward,
-             which is the point of the studio; opening one object is a
-             deliberate detour via its chip, not the default path. */
-          <ScanScreen
-            onBack={() => setScreen('home')}
-            onAddToStudio={() => setScreen('studio')}
-            onOpenObject={(id) => {
-              setObjectId(id);
-              setScreen('object');
-            }}
-          />
-        ) : screen === 'object' && objectId ? (
-          /* A single object's settings. Generating from here still arranges
-             the whole session, so it returns to the studio rather than
-             jumping past it. */
-          <ObjectDetailScreen
-            objectId={objectId}
-            onBack={() => setScreen('studio')}
-            onGenerate={() => setScreen('studio')}
-            onAddObject={() => setScreen('scan')}
-          />
-        ) : screen === 'studio' ? (
-          /* Steps 2 and 3 — all the captured sounds together, arranged. */
-          <JamScreen
-            onBack={() => setScreen('scan')}
-            onFinish={() => setScreen('track')}
-          />
-        ) : screen === 'create' ? (
-          <CreateJamScreen
-            onBack={() => setScreen('home')}
-            onRecord={() => setScreen('scan')}
-            onGenerate={() => setScreen('studio')}
-          />
-        ) : screen === 'track' ? (
-          /* Step 4 — the finished jam. */
-          <TrackDetailScreen
-            onBack={() => setScreen('studio')}
-            onKeepCreating={() => setScreen('scan')}
-            onAddSounds={() => setScreen('scan')}
-          />
-        ) : screen === 'profile' ? (
-          <ProfileScreen
-            onBack={() => setScreen('home')}
-            onOpenJams={() => setScreen('jams')}
-          />
+        ) : screen === 'capture' ? (
+          <CaptureScreen onDone={() => setScreen('jam')} />
         ) : (
-          <MyJamsScreen
-            onBack={() => setScreen('home')}
-            onOpen={async (id) => {
-              await openSession(id);
-              setScreen('track');
-            }}
-            onNewJam={() => setScreen('scan')}
-          />
+          <JamScreen onBack={() => setScreen('home')} />
         )}
 
-        {/* Nav is hidden on the welcome screen, a full-bleed standalone
-            moment, and on scan, where it would cover the capture controls. */}
-        {screen !== 'welcome' && screen !== 'scan' && (
+        {/* Nav is hidden on the welcome screen, which is a full-bleed
+            standalone moment rather than part of the tabbed app. */}
+        {screen !== 'welcome' && screen !== 'capture' && (
           <BottomNav
-            active={
-              screen === 'home'
-                ? 'home'
-                : screen === 'jams'
-                  ? 'jams'
-                  : screen === 'profile'
-                    ? 'profile'
-                    : 'studio'
-            }
-            onSelect={(t) => setScreen(t)}
-            onCapture={() => setScreen('scan')}
+            active={screen === 'home' ? 'home' : 'studio'}
+            onSelect={(t) => setScreen(t === 'home' ? 'home' : 'jam')}
+            onCapture={() => setScreen('capture')}
+            disabled={['jams', 'profile']}
           />
         )}
 

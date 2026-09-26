@@ -8,7 +8,6 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { BOTTOM_NAV_CLEARANCE } from '@/components/ui/BottomNav';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { ObjectIcon } from '@/components/ObjectIcon';
@@ -34,36 +33,11 @@ interface Props {
 
 /** Illustrative categories — not selectable, no audio attached. */
 const EXPLORE = [
-  {
-    label: 'Cups',
-    role: 'Percussion',
-    color: '#F472B6',
-    art: require('../../assets/objects/cups.png'),
-  },
-  {
-    label: 'Plants',
-    role: 'Ambient',
-    color: '#34D399',
-    art: require('../../assets/objects/plants.png'),
-  },
-  {
-    label: 'Laptops',
-    role: 'Synth',
-    color: '#A78BFA',
-    art: require('../../assets/objects/laptops.png'),
-  },
-  {
-    label: 'Bottles',
-    role: 'Hit',
-    color: '#38BDF8',
-    art: require('../../assets/objects/bottles.png'),
-  },
-  {
-    label: 'Keys',
-    role: 'Clicks',
-    color: '#FB923C',
-    art: require('../../assets/objects/keys.png'),
-  },
+  { category: 'cup' as const, label: 'Cups', role: 'Percussion', color: '#F472B6' },
+  { category: 'plant' as const, label: 'Plants', role: 'Ambient', color: '#34D399' },
+  { category: 'laptop' as const, label: 'Laptops', role: 'Synth', color: '#A78BFA' },
+  { category: 'bottle' as const, label: 'Bottles', role: 'Hit', color: '#38BDF8' },
+  { category: 'keys' as const, label: 'Keys', role: 'Clicks', color: '#FB923C' },
 ];
 
 export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
@@ -84,7 +58,7 @@ export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
       <ScrollView
         contentContainerStyle={[
           styles.scroll,
-          { paddingTop: insets.top + spacing.md, paddingBottom: insets.bottom + BOTTOM_NAV_CLEARANCE },
+          { paddingTop: insets.top + spacing.md, paddingBottom: insets.bottom + 110 },
         ]}
         showsVerticalScrollIndicator={false}
       >
@@ -140,13 +114,13 @@ export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
           style={styles.captureCard}
         >
           <Image
-            source={require('../../assets/hero-mug.png')}
+            source={require('../../assets/home-reference.png')}
             style={styles.captureBg}
             resizeMode="cover"
             accessible={false}
           />
           <LinearGradient
-            colors={['rgba(8,9,12,0.78)', 'rgba(8,9,12,0.18)', 'rgba(8,9,12,0.72)']}
+            colors={['rgba(8,9,12,0.85)', 'rgba(8,9,12,0.45)', 'rgba(8,9,12,0.9)']}
             style={StyleSheet.absoluteFill}
           />
 
@@ -154,6 +128,13 @@ export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
             <Text style={styles.captureTitle}>
               Point at an object{'\n'}to capture its sound
             </Text>
+
+            <View style={styles.reticle}>
+              <View style={[styles.corner, styles.tl]} />
+              <View style={[styles.corner, styles.tr]} />
+              <View style={[styles.corner, styles.bl]} />
+              <View style={[styles.corner, styles.br]} />
+            </View>
 
             <View style={styles.scanPill}>
               <View style={styles.scanDot} />
@@ -200,7 +181,7 @@ export function HomeScreen({ onScan, onCompose, onOpenSession }: Props) {
         >
           {EXPLORE.map((e) => (
             <View key={e.label} style={styles.exploreCard}>
-              <Image source={e.art} style={styles.exploreArt} resizeMode="cover" />
+              <ObjectIcon category={e.category} color={e.color} size={34} />
               <Text style={styles.exploreName}>{e.label}</Text>
               <View style={[styles.rolePill, { borderColor: e.color }]}>
                 <Text style={[styles.roleText, { color: e.color }]}>{e.role}</Text>
@@ -416,7 +397,7 @@ const styles = StyleSheet.create({
   tabSub: { ...type.caption, color: 'rgba(255,255,255,0.7)' },
 
   captureCard: {
-    height: 186,
+    height: 220,
     borderRadius: radius.lg,
     overflow: 'hidden',
     borderWidth: 1,
@@ -483,22 +464,14 @@ const styles = StyleSheet.create({
   soundRole: { ...type.caption, fontSize: 9, textTransform: 'capitalize' },
 
   exploreCard: {
-    // Wide enough for the product photo to be recognisable; a 104pt card
-    // reduced the mug to a smudge.
-    width: 124,
+    width: 104,
     alignItems: 'center',
     gap: 7,
-    padding: spacing.sm,
+    padding: spacing.md,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.surface,
-  },
-  exploreArt: {
-    width: '100%',
-    height: 78,
-    borderRadius: radius.md,
-    marginBottom: spacing.sm,
   },
   exploreName: { ...type.label, fontSize: 12, color: colors.text },
   rolePill: {

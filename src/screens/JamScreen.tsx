@@ -35,14 +35,7 @@ import { colors, radius, spacing, type } from '@/theme';
  * The jam surface — panels 4 through 8 of the product mockups, in the order
  * the demo walks them: voice, guide, arrange, layers, vibes, player.
  */
-export function JamScreen({
-  onBack,
-  onFinish,
-}: {
-  onBack: () => void;
-  /** Step 4 — opens the finished jam. Absent until there is one to open. */
-  onFinish?: () => void;
-}) {
+export function JamScreen({ onBack }: { onBack: () => void }) {
   const insets = useSafeAreaInsets();
   const [showQuantize, setShowQuantize] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -73,19 +66,6 @@ export function JamScreen({
           <Text style={styles.backText}>‹ Capture</Text>
         </Pressable>
         <LatencyBadge compact />
-
-        {/* Step 4. Shown only once there is an arrangement to open, so the
-            control never promises a jam that does not exist yet. */}
-        {onFinish && s.plan && (
-          <Pressable
-            onPress={onFinish}
-            accessibilityRole="button"
-            accessibilityLabel="Open your finished jam"
-            style={styles.finish}
-          >
-            <Text style={styles.finishText}>Your Jam ›</Text>
-          </Pressable>
-        )}
       </View>
 
       <ScrollView
@@ -367,15 +347,6 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.md,
   },
   back: { paddingVertical: spacing.sm, paddingRight: spacing.md },
-  finish: {
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: 'rgba(168,85,247,0.6)',
-    backgroundColor: 'rgba(30,20,50,0.85)',
-  },
-  finishText: { fontSize: 13, fontWeight: '700', color: '#DDD6FE' },
   backText: { ...type.label, color: colors.textDim },
   scroll: { gap: spacing.lg },
   cards: { gap: spacing.md, paddingHorizontal: spacing.lg },

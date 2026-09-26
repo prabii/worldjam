@@ -91,10 +91,8 @@ export function RhythmGuide({ plan, objects, playing }: Props) {
 
       {/* The sequence, as panel 5 shows it: icon, name, count, chevron. */}
       <View style={styles.sequence}>
-        {/* Keyed by position as well as id: the same object can appear more
-            than once in a sequence, and an id alone then collides. */}
         {counts.map((entry, i) => (
-          <React.Fragment key={`${entry.object.id}-${i}`}>
+          <React.Fragment key={entry.object.id}>
             <View style={styles.seqItem}>
               <View style={[styles.seqIcon, { borderColor: entry.object.color }]}>
                 <ObjectIcon
