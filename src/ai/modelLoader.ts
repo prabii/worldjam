@@ -198,6 +198,7 @@ export async function initModel(explicitPath?: string): Promise<void> {
       name: runtime.name,
       isReady: () => runtime.isReady(),
       generate: (prompt, maxTokens) => runtime.generate(format(prompt), maxTokens),
+      generateJson: (prompt, maxTokens, schema, temperature) => runtime.generateJson(format(prompt), maxTokens, schema, temperature),
     });
 
     handle = runtime;

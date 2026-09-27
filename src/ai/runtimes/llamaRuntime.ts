@@ -38,6 +38,7 @@ export interface LlamaRuntimeHandle extends GemmaRuntime {
   release(): Promise<void>;
   /** Populated after a failed load, for surfacing in the UI. */
   readonly lastError: string | null;
+  generateJson(prompt: string, maxTokens: number, jsonSchema: object | null, temperature: number): Promise<string>;
 }
 
 const DEFAULTS = {
@@ -46,7 +47,9 @@ const DEFAULTS = {
    * small JSON object. 1024 is ample, and on a 4.6B model every extra token of
    * context costs real KV-cache memory on a phone.
    */
-  contextSize: 1024,
+  // V2 prompts carry a sound inventory and knowledge-base rules; 4096 fits
+  // them plus a full plan reply with room to spare.
+  contextSize: 4096,
   gpuLayers: 0,
   /*
    * Six threads on an eight-core phone.
@@ -127,6 +130,23 @@ export function createLlamaRuntime(opts: LlamaOptions): LlamaRuntimeHandle {
         penalty_repeat: 1.0,
       });
 
+      return result.text ?? '';
+    },
+
+    async generateJson(prompt: string, maxTokens: number, jsonSchema: object | null, temperature: number): Promise<string> {
+      if (!context) {
+        throw new Error('model not loaded');
+      }
+      const result = await context.completion({
+        prompt,
+        n_predict: maxTokens,
+        temperature,
+        top_k: 40,
+        top_p: 0.92,
+        stop: [...GEMMA4_STOPS],
+        penalty_repeat: 1.05,
+        ...(jsonSchema ? { response_format: { type: 'json_schema' as const, json_schema: { strict: true, schema: jsonSchema } } } : {}),
+      });
       return result.text ?? '';
     },
 

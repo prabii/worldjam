@@ -156,6 +156,11 @@ export interface MusicPlan {
   layers: PlanLayer[];
   mix: PlanMix;
   lyrics: PlanLyrics | null;
+  /**
+   * Style description for the optional ACE-Step production pass (genre,
+   * instruments, feel). Always instrumental: the user's own voice is the vocal.
+   */
+  caption?: string;
 }
 
 /** Patch operations for small edits (doc: "Prefer patches for small changes"). */

@@ -40,23 +40,9 @@ export interface LyricSet {
  * only decision this feeds is "does this line fit in four beats". A count that
  * is occasionally off by one changes nothing.
  */
-export function countSyllables(text: string): number {
-  const words = text.toLowerCase().match(/[a-z']+/g) ?? [];
-  let total = 0;
+import { countSyllables } from './syllables';
 
-  for (const word of words) {
-    // Vowel groups approximate syllables.
-    const groups = word.match(/[aeiouy]+/g);
-    let n = groups ? groups.length : 1;
-
-    // Silent terminal 'e' ("make" is one syllable, not two).
-    if (word.length > 2 && word.endsWith('e') && !/[aeiouy]e$/.test(word)) {
-      n = Math.max(1, n - 1);
-    }
-    total += Math.max(1, n);
-  }
-  return total;
-}
+export { countSyllables };
 
 /**
  * Distributes lines across the loop so they land on musical boundaries.

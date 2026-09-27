@@ -188,6 +188,8 @@ export interface PerformanceEvent {
   padIndex: number;
   timeMs: number;
   velocity: number;
+  /** A looping pad was switched off at this time. */
+  stop?: boolean;
 }
 
 export interface StudioSession {

@@ -21,6 +21,11 @@ export interface GemmaRuntime {
   isReady(): boolean;
   /** Returns raw model text; the caller parses and validates it. */
   generate(prompt: string, maxTokens: number): Promise<string>;
+  /**
+   * V2: grammar-constrained generation. `jsonSchema` becomes a GBNF grammar in
+   * llama.cpp, so the reply is always syntactically valid JSON of that shape.
+   */
+  generateJson?(prompt: string, maxTokens: number, jsonSchema: object | null, temperature: number): Promise<string>;
 }
 
 let runtime: GemmaRuntime | null = null;
