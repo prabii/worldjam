@@ -4,7 +4,6 @@ import { ScrollView, StyleSheet, TextInput, View } from 'react-native';
 import { ConfirmDelete } from '../components/ConfirmDelete';
 import { toast } from '../components/Toasts';
 import { Button, Chip, Field, Header, Screen } from '../components/ui';
-import { captureRefs } from '../ai/fallback';
 import { generateLyrics, lyricsToPlanHints, lyricsToText, rewriteLyrics, textToLyrics, type RewriteAction } from '../ai/lyricsV2';
 import type { PlanLyrics } from '../contracts/musicPlan';
 import { useNav } from '../nav/store';
@@ -18,7 +17,6 @@ const ACTIONS: Array<{ id: RewriteAction; label: string }> = [
   { id: 'shorten', label: 'Shorten' },
   { id: 'emotional', label: 'More emotional' },
   { id: 'rhyme', label: 'Rhyme' },
-  { id: 'language', label: 'Change language' },
 ];
 
 export function LyricsEditorScreen({ id, trackId, captureIds }: { id?: string; trackId?: string; captureIds?: string[] }) {
@@ -28,7 +26,8 @@ export function LyricsEditorScreen({ id, trackId, captureIds }: { id?: string; t
   const [description, setDescription] = useState('');
   const [text, setText] = useState('');
   const [theme, setTheme] = useState('');
-  const [language, setLanguage] = useState('en');
+  // English only (product decision); stored so the field stays meaningful.
+  const language = 'en';
   const [busy, setBusy] = useState<string | null>(null);
   const [confirm, setConfirm] = useState(false);
 
@@ -42,7 +41,6 @@ export function LyricsEditorScreen({ id, trackId, captureIds }: { id?: string; t
           setName(l.name);
           setDescription(l.description);
           setText(l.text);
-          setLanguage(l.language);
         }
       } else if (trackId) {
         const t = await lib.tracks.get(trackId);
@@ -79,9 +77,8 @@ export function LyricsEditorScreen({ id, trackId, captureIds }: { id?: string; t
   const onAction = (a: RewriteAction) =>
     run(a, async () => {
       if (!text.trim()) return toast('Write or generate lyrics first');
-      const r = await rewriteLyrics(structured(), a, currentLlm(), { language: a === 'language' ? (language === 'en' ? 'es' : 'en') : language });
+      const r = await rewriteLyrics(structured(), a, currentLlm(), { language });
       setText(lyricsToText(r.lyrics));
-      if (a === 'language') setLanguage(r.lyrics.language);
     });
 
   const save = async (): Promise<string | null> => {
@@ -99,6 +96,8 @@ export function LyricsEditorScreen({ id, trackId, captureIds }: { id?: string; t
       setLyricId(lid);
     }
     if (trackId) await lib.tracks.update(trackId, { lyricId: lid });
+    // Written from Studio: these become the session's lyrics (linked on Save track).
+    if (!trackId && useStudio.getState().session) setLyrics(structured(), lid);
     notifyLibraryChanged();
     return lid;
   };
@@ -106,12 +105,12 @@ export function LyricsEditorScreen({ id, trackId, captureIds }: { id?: string; t
   const makeTrack = () =>
     run('track', async () => {
       if (!text.trim()) return toast('Write or generate lyrics first');
-      await save();
+      const lid = await save();
       const l = structured();
       const hints = lyricsToPlanHints(l, useStudio.getState().style);
-      setLyrics(l);
+      setLyrics(l, lid);
       setBpm(hints.tempoBpm);
-      setDuration(hints.durationSec <= 30 ? 30 : hints.durationSec <= 45 ? 45 : 60);
+      setDuration(hints.durationSec <= 30 ? 30 : hints.durationSec <= 45 ? 45 : hints.durationSec <= 60 ? 60 : 90);
       setPrompt(`A song for these lyrics: ${l.title}${theme ? ` — ${theme}` : ''}`);
       setMode('AI');
       toast('Lyrics loaded in Studio — tap Generate', 'success');
@@ -119,7 +118,6 @@ export function LyricsEditorScreen({ id, trackId, captureIds }: { id?: string; t
       setTab('studio');
     });
 
-  void captureRefs;
   return (
     <Screen scroll>
       <Header title={lyricId ? 'Edit lyrics' : 'New lyrics'} subtitle="Shown as karaoke — you sing them" onBack={pop} />
@@ -146,7 +144,7 @@ export function LyricsEditorScreen({ id, trackId, captureIds }: { id?: string; t
         onConfirm={async () => {
           const lib = await getLibrary();
           if (lyricId) await lib.lyrics.softDelete(lyricId);
-          if (useStudio.getState().lyrics) setLyrics(null);
+          if (useStudio.getState().lyricId === lyricId) setLyrics(null);
           notifyLibraryChanged();
           setConfirm(false);
           toast('Deleted', 'success');

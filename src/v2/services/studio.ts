@@ -1,13 +1,15 @@
 import * as FileSystem from 'expo-file-system';
 import { create } from 'zustand';
 
+import { textToLyrics } from '../ai/lyricsV2';
 import WorldJamAudio from 'worldjam-audio';
 
 import type { Capture, PadSettings, PerformanceEvent, StudioSession, StudioSource, Track } from '../contracts/library';
 import type { LayerRole, MusicPlan, NoteName, PlanLyrics, ScaleId, StyleId } from '../contracts/musicPlan';
 import type { PlannerCapture } from '../ai/fallback';
 import { suggestionToPerformance, type GuideSuggestion } from '../ai/guide';
-import { roleForCapture } from '../ai/kb/rules';
+import { describeFeatures, roleForCapture } from '../ai/kb/rules';
+import { styleSpec } from '../ai/kb/styles';
 import { editPlan, generatePlan } from '../ai/planner';
 import { normalizeKey } from '../ai/validator';
 import { compilePlan, RENDERER_VERSION, type InventoryItem } from '../audio/planCompiler';
@@ -77,6 +79,10 @@ interface StudioState {
   preview: Preview | null;
   productionAmount: number;
   lyrics: PlanLyrics | null;
+  /** Saved lyric the studio lyrics came from — linked to the track on save. */
+  lyricId: string | null;
+  /** AI mode timing (same controls as Manual); grid 0 = the style's own feel. */
+  aiTiming: QuantizeSettings;
 }
 
 export const useStudio = create<StudioState>(() => ({
@@ -99,7 +105,13 @@ export const useStudio = create<StudioState>(() => ({
   preview: null,
   productionAmount: 0.6,
   lyrics: null,
+  lyricId: null,
+  aiTiming: { grid: 0, strength: 0.85, swing: 0 },
 }));
+
+/** Last hit time per pad (ms) — the soundboard flashes a pad when it sounds, live or from a take. */
+export const usePadHits = create<Record<number, number>>(() => ({}));
+const flash = (padIndex: number) => usePadHits.setState({ [padIndex]: Date.now() });
 
 const set = useStudio.setState;
 const get = useStudio.getState;
@@ -140,6 +152,8 @@ const scheduler = new TakeScheduler({
     const src = sourceAt(e.padIndex);
     if (!src || src.settings.muted) return;
     const s = src.settings;
+    const lead = ((frame - WorldJamAudio.currentFrame()) / sampleRate()) * 1000;
+    setTimeout(() => flash(e.padIndex), Math.max(0, lead));
     WorldJamAudio.triggerAtPitched?.(e.padIndex, dbToGain(s.gainDb) * e.velocity, enginePan(s.pan), frame, 2 ** (s.pitchSemitones / 12), false);
   },
   silence: () => WorldJamAudio.stopAllVoices(),
@@ -197,7 +211,7 @@ export async function newSession(): Promise<void> {
   scheduler.stop();
   const lib = await getLibrary();
   const s = await lib.sessions.create({ name: 'Session', mode: get().mode, bpm: 92, key: null, scale: null, style: null, sources: [], performance: [], plan: null, lyricId: null, padLayout: 'auto' });
-  set({ session: s, captures: {}, take: null, preview: null, job: null, error: null, prompt: '', lyrics: null });
+  set({ session: s, captures: {}, take: null, preview: null, job: null, error: null, prompt: '', lyrics: null, lyricId: null });
 }
 
 export async function addSources(captureIds: string[]): Promise<void> {
@@ -257,6 +271,11 @@ export function setBpm(bpm: number): void {
   if (get().metronome && get().recording) WorldJamAudio.setMetronome(true, get().session!.bpm);
 }
 
+export function setPadLayout(padLayout: StudioSession['padLayout']): void {
+  const s = get().session;
+  if (s) update({ ...s, padLayout });
+}
+
 export function setMode(mode: 'MANUAL' | 'AI'): void {
   scheduler.stop();
   set({ mode });
@@ -290,6 +309,7 @@ function elapsedMs(): number {
 export function triggerPad(padIndex: number, velocity = 1): void {
   const src = sourceAt(padIndex);
   if (!src || src.settings.muted) return;
+  flash(padIndex);
   const s = src.settings;
   const looping = get().loopingPads.includes(padIndex);
   if (s.loop && looping) {
@@ -426,7 +446,7 @@ function voiceLock(): { tempoBpm?: number | null; key?: NoteName | null; scale?:
 
 async function renderPreview(plan: MusicPlan, token: number, opts: { production?: { path: string; durationSec: number; amount: number } | null } = {}): Promise<Preview | null> {
   set({ job: { stage: 'RENDERING', progress: 0 } });
-  const graph = await compilePlan(plan, await inventory(), compileDeps, { production: opts.production ?? null });
+  const graph = await compilePlan(plan, await inventory(), compileDeps, { production: opts.production ?? null, timing: get().aiTiming });
   if (token !== jobToken) return null;
   set({ job: { stage: 'MIXING', progress: 0 } });
   const s = await mediaStore();
@@ -524,6 +544,32 @@ export function enhanceTake(instruction: string): Promise<void> {
  * ACE-Step re-produce it in the plan's style, then blend it under the user's
  * sounds and voice. Optional and slow (~2–3 min on the phone).
  */
+/**
+ * ACE-Step prompt: the user's own words first (never collapsed to a style),
+ * then the genre's signature instruments and feel, what the captured sounds
+ * are like, and the drum policy — drum-led genres keep generated drums, the
+ * rest ask for none so the user's objects stay the beat.
+ */
+export function productionCaption(plan: MusicPlan, userPrompt: string | null): string {
+  const spec = styleSpec(plan.style);
+  const sounds = Object.values(get().captures)
+    .filter((c) => c.type !== 'HUM' && c.type !== 'VOCAL')
+    .slice(0, 4)
+    .map((c) => describeFeatures(c.features))
+    .filter(Boolean);
+  const parts = [
+    userPrompt?.trim() || null,
+    spec.caption,
+    spec.instruments,
+    plan.mood ?? null,
+    sounds.length ? `built around ${sounds.join('; ')}` : null,
+    spec.drumLed ? null : 'no drums',
+    `${plan.tempoBpm} bpm`,
+    'instrumental',
+  ];
+  return parts.filter(Boolean).join(', ').slice(0, 480);
+}
+
 export function produce(): Promise<void> {
   return runJob(async (token) => {
     const preview = get().preview;
@@ -533,7 +579,7 @@ export function produce(): Promise<void> {
     const plan = preview.plan;
     set({ job: { stage: 'RENDERING', progress: 0 } });
     const inv = await inventory();
-    const bedGraph = await compilePlan(plan, inv, compileDeps, { excludeRoles: ['vocal'] });
+    const bedGraph = await compilePlan(plan, inv, compileDeps, { excludeRoles: ['vocal'], timing: get().aiTiming });
     const s = await mediaStore();
     const bedUri = s.tempUri('wav');
     await renderToFile(bedGraph, bedUri);
@@ -542,12 +588,13 @@ export function produce(): Promise<void> {
     const sub = WorldJamAudio.addListener?.('onAceProgress', (e) => token === jobToken && set({ job: { stage: 'PRODUCING', progress: e.progress } }));
     const request = {
       task_type: 'cover-nofsq',
-      caption: plan.caption ?? `${plan.style}, instrumental`,
+      caption: productionCaption(plan, preview.prompt),
       lyrics: '[Instrumental]',
       bpm: plan.tempoBpm,
       keyscale: `${plan.key} ${plan.scale === 'major' || plan.scale === 'mixolydian' || plan.scale === 'pentatonic_major' ? 'major' : 'minor'}`,
       duration: Math.round(plan.durationSec + 1),
-      seed: 7,
+      // Fresh seed per press: the same words never hand back a stale take.
+      seed: Math.floor(Math.random() * 2_147_483_647),
       inference_steps: 8,
       audio_cover_strength: 0.4,
       output_format: 'wav16',
@@ -661,8 +708,11 @@ export function setDuration(durationSec: number): void {
 export function setProductionAmount(amount: number): void {
   set({ productionAmount: amount });
 }
-export function setLyrics(lyrics: PlanLyrics | null): void {
-  set({ lyrics });
+export function setLyrics(lyrics: PlanLyrics | null, lyricId: string | null = null): void {
+  set({ lyrics, lyricId: lyrics ? lyricId : null });
+}
+export function setAiTiming(t: Partial<QuantizeSettings>): void {
+  set({ aiTiming: { ...get().aiTiming, ...t } });
 }
 
 /** Opens a saved track in a new session: its sounds on the pads and its plan ready to edit. */
@@ -680,4 +730,8 @@ export async function openTrackForEditing(track: Track): Promise<void> {
   });
   const sess = get().session;
   if (sess) update({ ...sess, plan: track.plan, bpm: track.plan.tempoBpm, style: track.plan.style });
+  if (track.lyricId) {
+    const l = await (await getLibrary()).lyrics.get(track.lyricId);
+    if (l) set({ lyrics: l.structured ?? textToLyrics(l.text, l.name, l.language), lyricId: l.id });
+  }
 }

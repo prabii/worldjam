@@ -30,6 +30,33 @@ export interface CompileOptions {
   excludeRoles?: LayerRole[];
   /** ACE-Step production to blend in, and how much of it (0..1) sits over the capture bed. */
   production?: { path: string; durationSec: number; amount: number } | null;
+  /**
+   * The user's timing (same controls as Manual): grid 0 = keep the style's own
+   * feel, else hits are pulled onto 1/4, 1/8 or 1/16 by `strength`; `swing`
+   * 0..1 delays every second subdivision; tighter strength = less humanising.
+   */
+  timing?: { grid: 0 | 1 | 2 | 4; strength: number; swing: number } | null;
+}
+
+type Timing = CompileOptions['timing'];
+
+/** Style feel, overridden by the user's timing when set. */
+function feelFor(spec: { swing: number; swingUnit: 0.25 | 0.5; humanizeMs: number }, t: Timing) {
+  if (!t) return { place: (beat: number) => swingBeat(beat, spec.swing, spec.swingUnit), humanizeMs: spec.humanizeMs };
+  const unit: 0.25 | 0.5 = t.grid === 1 || t.grid === 2 ? 0.5 : 0.25;
+  const ratio = t.swing > 0 ? 0.5 + Math.min(1, t.swing) * 0.25 : spec.swing;
+  const strength = Math.max(0, Math.min(1, t.strength));
+  return {
+    place: (beat: number) => {
+      let b = beat;
+      if (t.grid > 0) {
+        const q = Math.round(beat * t.grid) / t.grid;
+        b = beat + (q - beat) * strength;
+      }
+      return swingBeat(b, ratio, t.swing > 0 ? unit : spec.swingUnit);
+    },
+    humanizeMs: t.grid > 0 ? spec.humanizeMs * (1 - strength) : spec.humanizeMs,
+  };
 }
 
 const NOTE_INDEX: Record<string, number> = { C: 0, 'C#': 1, D: 2, 'D#': 3, E: 4, F: 5, 'F#': 6, G: 7, 'G#': 8, A: 9, 'A#': 10, B: 11 };
@@ -75,10 +102,11 @@ interface Timeline {
 }
 
 /** Events for a patterned layer across one section: energy thinning, accents, swing, humanisation, end-of-section fills. */
-function patternEvents(layer: PlanLayer, section: PlanSection, next: PlanSection | undefined, tl: Timeline, style: StyleId, srcDur: number): RenderEvent[] {
+function patternEvents(layer: PlanLayer, section: PlanSection, next: PlanSection | undefined, tl: Timeline, style: StyleId, srcDur: number, timing?: Timing): RenderEvent[] {
   const pattern = layer.pattern ?? '';
   if (!pattern) return [];
   const spec = styleSpec(style);
+  const feel = feelFor(spec, timing);
   const rate = layer.pitch?.mode === 'fixed' ? 2 ** (layer.pitch.semitones / 12) : 1;
   const out: RenderEvent[] = [];
   const isDrum = DRUMS.includes(layer.role);
@@ -95,9 +123,9 @@ function patternEvents(layer: PlanLayer, section: PlanSection, next: PlanSection
       let holds = 0;
       while (pattern[step + 1 + holds] === '-') holds++;
       const beat = bar * 4 + step / 4;
-      const swung = swingBeat(beat, spec.swing, spec.swingUnit);
+      const swung = feel.place(beat);
       const seed = `${layer.id}:${section.id}:${bar}:${step}`;
-      const human = (spec.humanizeMs / 1000) * jitter(seed);
+      const human = (feel.humanizeMs / 1000) * jitter(seed);
       const time = (section.startSec ?? 0) + swung * tl.secPerBeat + (step === 0 ? Math.max(0, human) : human);
       const gainDb = (ch === 'X' ? 0 : -5) + (section.energy - 1) * 6 + jitter(`v${seed}`) * 1.2;
       // Drums are cut before they smear into the next hit; held steps sustain.
@@ -109,8 +137,9 @@ function patternEvents(layer: PlanLayer, section: PlanSection, next: PlanSection
 }
 
 /** A tonal capture played as bass/chords/melody following the harmony engine. */
-function pitchedEvents(layer: PlanLayer, section: PlanSection, plan: MusicPlan, tl: Timeline, sourceMidi: number): RenderEvent[] {
+function pitchedEvents(layer: PlanLayer, section: PlanSection, plan: MusicPlan, tl: Timeline, sourceMidi: number, timing?: Timing): RenderEvent[] {
   const spec = styleSpec(plan.style);
+  const feel = feelFor(spec, timing);
   const chords = progressionFor(spec.feel, section.bars);
   const mode = layer.pitch && layer.pitch.mode !== 'fixed' && layer.pitch.mode !== 'hum' ? layer.pitch.mode : 'melody';
   const notes = mode === 'bass' ? buildBassline(chords, spec.feel) : mode === 'chords' ? buildChordVoicing(chords, spec.feel) : buildArp(chords, spec.feel);
@@ -119,7 +148,7 @@ function pitchedEvents(layer: PlanLayer, section: PlanSection, plan: MusicPlan, 
   return notes
     .filter((n) => n.beat < section.bars * 4)
     .map((n) => ({
-      timeSec: (section.startSec ?? 0) + swingBeat(n.beat, spec.swing, spec.swingUnit) * tl.secPerBeat,
+      timeSec: (section.startSec ?? 0) + feel.place(n.beat) * tl.secPerBeat,
       rate: rateFor(sourceMidi, octaveBase + root + n.semitone),
       gainDb: 20 * Math.log10(Math.max(0.05, n.velocity)) + (section.energy - 1) * 5 + (mode === 'chords' ? -4 : 0),
       durationSec: Math.max(0.05, n.duration * tl.secPerBeat),
@@ -181,11 +210,11 @@ export async function compilePlan(plan: MusicPlan, inventory: Record<string, Inv
           .map((s) => ({ timeSec: s.startSec ?? 0, durationSec: Math.min(srcDur, (s.endSec ?? 0) - (s.startSec ?? 0)), rate: 1, gainDb: 0, fadeInSec: 0.02, fadeOutSec: 0.25 }));
       } else if (layer.pitch && layer.pitch.mode !== 'fixed' && layer.pitch.mode !== 'hum') {
         const midi = item.features?.pitchHz ? hzToMidi(item.features.pitchHz) : 60;
-        events = active.flatMap((s) => pitchedEvents(layer, s, plan, tl, midi));
+        events = active.flatMap((s) => pitchedEvents(layer, s, plan, tl, midi, opts.timing));
       } else if (SUSTAINED.includes(layer.role) || !layer.pattern) {
         events = active.map((s) => loopEvent(s, (s.energy - 1) * 6, 0.3));
       } else {
-        events = active.flatMap((s) => patternEvents(layer, s, plan.sections[plan.sections.indexOf(s) + 1], tl, plan.style, srcDur));
+        events = active.flatMap((s) => patternEvents(layer, s, plan.sections[plan.sections.indexOf(s) + 1], tl, plan.style, srcDur, opts.timing));
       }
     } else if (layer.source.kind === 'synth') {
       const inst = layer.source.instrument;

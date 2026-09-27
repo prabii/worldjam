@@ -5,9 +5,14 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { Capture, CaptureType, Lyric, SortOrder, Track, TrackMode } from '../contracts/library';
 import { CaptureCard, LyricCard, TrackCard } from '../components/cards';
 import { Icon } from '../components/Icon';
-import { Button, Chip, Empty, Segmented, Sheet } from '../components/ui';
+import { ConfirmDelete } from '../components/ConfirmDelete';
+import { toast } from '../components/Toasts';
+import { Button, Chip, Empty, IconButton, Segmented, Sheet } from '../components/ui';
 import { useNav } from '../nav/store';
-import { useLibraryQuery } from '../services/library';
+import { deleteCapture } from '../services/capture';
+import { getLibrary, notifyLibraryChanged, useLibraryQuery } from '../services/library';
+import { stop as stopPlayer } from '../services/player';
+import { removeSource, setLyrics, useStudio } from '../services/studio';
 import { color, font, radius, space } from '../theme';
 
 type Section = 'captures' | 'tracks' | 'lyrics';
@@ -37,6 +42,7 @@ export function MyJamsScreen({ bottomInset }: { bottomInset: number }) {
   const insets = useSafeAreaInsets();
   const { push } = useNav();
   const [section, setSection] = useState<Section>('captures');
+  const [doomed, setDoomed] = useState<{ kind: Section; id: string; name: string } | null>(null);
   const [text, setText] = useState('');
   const [search, setSearch] = useState('');
   const [sort, setSort] = useState<SortOrder>('newest');
@@ -146,15 +152,20 @@ export function MyJamsScreen({ bottomInset }: { bottomInset: number }) {
           if (data && items.length < data.total) setLimit((l) => l + PAGE);
         }}
         keyboardShouldPersistTaps="handled"
-        renderItem={({ item }) =>
-          section === 'captures' ? (
-            <CaptureCard capture={item as Capture} onOpen={() => push({ name: 'captureDetail', id: item.id })} />
-          ) : section === 'tracks' ? (
-            <TrackCard track={item as Track} onOpen={() => push({ name: 'trackDetail', id: item.id })} />
-          ) : (
-            <LyricCard lyric={item as Lyric} onOpen={() => push({ name: 'lyricsEditor', id: item.id })} />
-          )
-        }
+        renderItem={({ item }) => (
+          <View style={styles.itemRow}>
+            <View style={{ flex: 1 }}>
+              {section === 'captures' ? (
+                <CaptureCard capture={item as Capture} onOpen={() => push({ name: 'captureDetail', id: item.id })} />
+              ) : section === 'tracks' ? (
+                <TrackCard track={item as Track} onOpen={() => push({ name: 'trackDetail', id: item.id })} />
+              ) : (
+                <LyricCard lyric={item as Lyric} onOpen={() => push({ name: 'lyricsEditor', id: item.id })} />
+              )}
+            </View>
+            <IconButton icon="delete" label={`Delete ${item.name}`} tint={color.error} onPress={() => setDoomed({ kind: section, id: item.id, name: item.name })} />
+          </View>
+        )}
         ListEmptyComponent={
           loading ? null : search ? (
             <Empty icon="search" title="No matches" body={`Nothing in ${section} matches “${search}”.`} />
@@ -176,6 +187,40 @@ export function MyJamsScreen({ bottomInset }: { bottomInset: number }) {
             />
           )
         }
+      />
+      <ConfirmDelete
+        visible={!!doomed}
+        what={doomed ? `“${doomed.name}”` : ''}
+        detail={
+          doomed?.kind === 'captures'
+            ? 'It disappears from My Jams and any Studio session. Tracks already made with it keep their audio.'
+            : doomed?.kind === 'tracks'
+              ? 'The track and its audio are removed. Its sounds and lyrics stay.'
+              : 'Tracks that used these lyrics keep their audio.'
+        }
+        onCancel={() => setDoomed(null)}
+        onConfirm={async () => {
+          if (!doomed) return;
+          try {
+            await stopPlayer();
+            const lib = await getLibrary();
+            if (doomed.kind === 'captures') {
+              await deleteCapture(doomed.id);
+              if (useStudio.getState().session?.sources.some((x) => x.captureId === doomed.id)) await removeSource(doomed.id);
+            } else if (doomed.kind === 'tracks') {
+              await lib.tracks.softDelete(doomed.id);
+            } else {
+              await lib.lyrics.softDelete(doomed.id);
+              if (useStudio.getState().lyricId === doomed.id) setLyrics(null);
+            }
+            notifyLibraryChanged();
+            toast('Deleted', 'success');
+          } catch (err) {
+            toast(err instanceof Error ? err.message : 'Could not delete', 'error');
+          } finally {
+            setDoomed(null);
+          }
+        }}
       />
       <Sheet visible={sortOpen} onClose={() => setSortOpen(false)} title="Sort by">
         <View style={{ gap: space.sm }}>
@@ -201,6 +246,7 @@ export function MyJamsScreen({ bottomInset }: { bottomInset: number }) {
 }
 
 const styles = StyleSheet.create({
+  itemRow: { flexDirection: 'row', alignItems: 'center', gap: space.xs },
   searchRow: { flexDirection: 'row', gap: space.sm },
   search: {
     flex: 1,

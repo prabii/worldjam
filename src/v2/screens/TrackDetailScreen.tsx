@@ -4,6 +4,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Peaks } from '../components/cards';
 import { ConfirmDelete } from '../components/ConfirmDelete';
 import { Icon } from '../components/Icon';
+import { Karaoke } from '../components/Karaoke';
+import { textToLyrics } from '../ai/lyricsV2';
 import { toast } from '../components/Toasts';
 import { Button, Empty, Field, Header, Screen } from '../components/ui';
 import { useNav } from '../nav/store';
@@ -24,6 +26,7 @@ export function TrackDetailScreen({ id }: { id: string }) {
   const [saving, setSaving] = useState(false);
   const state = usePlayer((s) => (s.activeId === id ? s.state : 'idle'));
   const progress = usePlayer((s) => (s.activeId === id && s.durationMs ? s.positionMs / s.durationMs : 0));
+  const positionMs = usePlayer((s) => (s.activeId === id ? s.positionMs : 0));
 
   useEffect(() => {
     if (!track) return;
@@ -58,6 +61,7 @@ export function TrackDetailScreen({ id }: { id: string }) {
         <View style={{ alignSelf: 'stretch' }}>
           <Peaks peaks={track.peaks} progress={progress} height={52} tint={color.cyan} />
         </View>
+        <Text style={font.mono}>{formatDuration(positionMs)} / {formatDuration(track.durationMs)}</Text>
         <Button label="Stop" icon="stop" disabled={state === 'idle'} onPress={() => void stop()} />
         <Text style={font.caption}>
           {[track.style, track.bpm ? `${track.bpm} BPM` : null, track.key ? `${track.key} ${track.scale ?? ''}` : null].filter(Boolean).join(' · ')}
@@ -65,9 +69,8 @@ export function TrackDetailScreen({ id }: { id: string }) {
       </View>
 
       {lyric ? (
-        <View style={styles.lyrics}>
-          <Text style={font.label}>Lyrics — {lyric.name}</Text>
-          <Text style={[font.body, { color: color.text }]}>{lyric.text}</Text>
+        <View style={{ marginTop: space.xl }}>
+          <Karaoke lyrics={lyric.structured ?? textToLyrics(lyric.text, lyric.name, lyric.language)} plan={track.plan} durationMs={track.durationMs} positionMs={positionMs} playing={state === 'playing'} />
         </View>
       ) : null}
 
@@ -131,5 +134,4 @@ export function TrackDetailScreen({ id }: { id: string }) {
 const styles = StyleSheet.create({
   player: { alignItems: 'center', gap: space.lg, padding: space.xl, borderRadius: radius.panel, backgroundColor: color.surface, borderWidth: 1, borderColor: color.line },
   vinyl: { width: 96, height: 96, borderRadius: 48, backgroundColor: color.text, alignItems: 'center', justifyContent: 'center', borderWidth: 8, borderColor: color.violet },
-  lyrics: { marginTop: space.xl, padding: space.lg, gap: space.sm, borderRadius: radius.card, backgroundColor: color.surface },
 });

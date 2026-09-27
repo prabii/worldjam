@@ -50,12 +50,14 @@ export function Screen({
   bottomInset?: number;
 }) {
   const insets = useSafeAreaInsets();
+  const kb = useKeyboardHeight();
   const pad = { paddingTop: insets.top + space.md, paddingHorizontal: padded ? space.lg : 0 };
   if (scroll) {
     return (
       <ScrollView
         style={styles.screen}
-        contentContainerStyle={[pad, { paddingBottom: insets.bottom + bottomInset + space.xxl }]}
+        // Room for the keyboard (edge-to-edge windows no longer resize), so a focused field can scroll above it.
+        contentContainerStyle={[pad, { paddingBottom: Math.max(insets.bottom + bottomInset, kb) + space.xxl }]}
         keyboardShouldPersistTaps="handled"
       >
         {children}

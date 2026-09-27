@@ -21,6 +21,14 @@ export interface Intent {
 }
 
 const STYLE_WORDS: Array<[RegExp, StyleId]> = [
+  [/\b(phonk|drift|memphis|cowbell)\b/, 'phonk'],
+  [/\b(mass ?beat|mass|dappankuthu|dappan ?kuthu|teen ?maar|thappu|parai|kuthu)\b/, 'massbeat'],
+  [/\b(bhangra|punjabi|dhol|tumbi)\b/, 'bhangra'],
+  [/\b(bollywood|hindi|filmi|desi)\b/, 'bollywood'],
+  [/\b(carnatic|veena|mridangam|south indian)\b/, 'carnatic'],
+  [/\b(indian classical|hindustani|raga|raag|sitar|tabla|bansuri|indian)\b/, 'indian_classical'],
+  [/\b(afro ?beats?|afro ?pop|amapiano|afro)\b/, 'afrobeats'],
+  [/\b(reggaeton|dembow|latin)\b/, 'reggaeton'],
   [/\b(lo-?fi|lofi|chillhop|study beats?)\b/, 'lofi'],
   [/\b(edm|electro|festival|big drop|dubstep|techno)\b/, 'edm'],
   [/\b(house|deep house|disco)\b/, 'house'],

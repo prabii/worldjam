@@ -26,11 +26,20 @@ export type StyleId =
   | 'house'
   | 'dnb'
   | 'cinematic'
-  | 'acoustic';
+  | 'acoustic'
+  | 'phonk'
+  | 'massbeat'
+  | 'bhangra'
+  | 'bollywood'
+  | 'carnatic'
+  | 'indian_classical'
+  | 'afrobeats'
+  | 'reggaeton';
 
 export const STYLE_IDS: StyleId[] = [
   'pop', 'rock', 'edm', 'jazz', 'lofi', 'chill', 'ambient',
   'hiphop', 'trap', 'house', 'dnb', 'cinematic', 'acoustic',
+  'phonk', 'massbeat', 'bhangra', 'bollywood', 'carnatic', 'indian_classical', 'afrobeats', 'reggaeton',
 ];
 
 export type NoteName = 'C' | 'C#' | 'D' | 'D#' | 'E' | 'F' | 'F#' | 'G' | 'G#' | 'A' | 'A#' | 'B';
