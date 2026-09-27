@@ -57,6 +57,9 @@ export const GENRES: GenreProfile[] = [
     name: 'Mass beat',
     keywords: [
       'mass',
+      // Longest keyword wins: "mass beat for a festival night" must not lose to EDM's "festival".
+      'mass beat',
+      'mass song',
       'dappankuthu',
       'kuthu',
       'teen maar',

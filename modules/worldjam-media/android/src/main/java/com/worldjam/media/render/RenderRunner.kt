@@ -35,7 +35,8 @@ object RenderRunner {
 
         val out = File(outputPath)
         out.parentFile?.mkdirs()
-        val totalFrames = (graph.durationSec * graph.sampleRate).toLong()
+        // Same rounding as Mixer: a fractional length must not fail the frame-count check.
+        val totalFrames = Math.round(graph.durationSec * graph.sampleRate)
         val stats: Mixer.Stats
         BufferedOutputStream(FileOutputStream(out), 1 shl 16).use { stream ->
             stream.write(ByteArray(44)) // header patched below, once the frame count is final

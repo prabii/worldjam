@@ -1,4 +1,6 @@
-import { generatePlan as gemmaArrange } from '@/ai/gemma';
+import { buildPrompt, generatePlan as gemmaArrange, getGemmaRuntime, type SessionSnapshot } from '@/ai/gemma';
+import { buildFallbackPlan } from '@/ai/fallbackArranger';
+import { extractJson, validatePlan as validateArrangement } from '@/ai/schema';
 import { SECTION_DENSITY, SECTION_GAIN, type Section, type SectionKind } from '@/audio/arrangement';
 import { describeObjects, genreTempo, grooveFor, matchGenre, type GenreProfile } from '@/audio/genres';
 import { applyGroove, directTempo } from '@/audio/groove';
@@ -103,6 +105,57 @@ const GENRE_TO_STYLE: Record<string, StyleId> = {
 const STYLE_OF_V1: Record<Style, StyleId> = { chill: 'chill', jazz: 'jazz', lofi: 'lofi', cinematic: 'cinematic', edm: 'edm', rock: 'rock' };
 const NOTES: NoteName[] = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 
+const BEAT_STEPS = Array.from({ length: 16 }, (_, i) => 1 + i / 4);
+
+/**
+ * Master's Gemma call (same prompt, same validator), with the answer held to
+ * master's plan shape by llama.rn's JSON grammar — on the phone the free-form
+ * reply often was not valid JSON, and the rules then arranged instead.
+ */
+async function arrangeWithGemma(snapshot: SessionSnapshot, instruction: string | undefined) {
+  const runtime = getGemmaRuntime();
+  if (!runtime?.isReady() || typeof runtime.generateJson !== 'function') return gemmaArrange(snapshot, instruction);
+  const labels = snapshot.objects.map((o) => o.label);
+  const schema = {
+    type: 'object',
+    properties: {
+      bpm: { type: 'integer', minimum: 60, maximum: 180 },
+      bars: { type: 'integer', minimum: 4, maximum: 16 },
+      objectPattern: {
+        type: 'array',
+        minItems: 1,
+        maxItems: Math.max(1, labels.length),
+        items: {
+          type: 'object',
+          properties: { object: { type: 'string', enum: labels }, beats: { type: 'array', minItems: 1, maxItems: 8, items: { type: 'number', enum: BEAT_STEPS } } },
+          required: ['object', 'beats'],
+        },
+      },
+      voiceRole: { type: 'string', enum: ['lead', 'harmony', 'texture', 'none'] },
+      accompaniment: { type: 'array', maxItems: 3, items: { type: 'string', enum: ['bass', 'chords', 'pad', 'arp', 'guitar'] } },
+      genre: { type: 'string', maxLength: 40 },
+      texture: { type: 'string', maxLength: 90 },
+      style: { type: 'string', enum: ['chill', 'jazz', 'lofi', 'cinematic', 'edm', 'rock'] },
+    },
+    required: ['bpm', 'bars', 'objectPattern', 'voiceRole', 'accompaniment', 'genre', 'texture', 'style'],
+  };
+  const started = Date.now();
+  const fallback = (error: string) => ({ plan: buildFallbackPlan(snapshot.objects, snapshot.style, snapshot.bpmHint), elapsedMs: Date.now() - started, repairs: [] as string[], usedFallback: true, error });
+  try {
+    const raw = await Promise.race([
+      runtime.generateJson(buildPrompt(snapshot, instruction), 360, schema, 0.5),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timed out after 90 s')), 90_000)),
+    ]);
+    const parsed = extractJson(raw);
+    if (parsed === null) return fallback('model returned no parseable JSON');
+    const { plan, repairs } = validateArrangement(parsed, snapshot.objects, snapshot.bpmHint ?? 92);
+    if (!plan) return fallback('plan failed validation');
+    return { plan, elapsedMs: Date.now() - started, repairs, usedFallback: false, error: undefined as string | undefined };
+  } catch (err) {
+    return fallback(err instanceof Error ? err.message : String(err));
+  }
+}
+
 /** A captured sound as one of master's objects. */
 function toObject(s: MasterSound, i: number): WorldJamObject {
   const f = s.features;
@@ -195,7 +248,7 @@ export async function masterGenerate(input: MasterInput, deps: MasterDeps): Prom
   const instruction = input.edit
     ? `${input.edit.instruction}. Current arrangement to change: ${prev!.genre ?? prev!.style} at ${prev!.bpm} BPM, beats ${JSON.stringify(prev!.objectPattern)}, accompaniment ${JSON.stringify(prev!.accompaniment)}.`
     : words ?? undefined;
-  const result = await gemmaArrange(
+  const result = await arrangeWithGemma(
     { objects, vocal, bpmHint: prev?.bpm ?? null, style: prev?.style ?? style, mood: undefined },
     instruction,
   );
@@ -370,6 +423,7 @@ export async function masterGenerate(input: MasterInput, deps: MasterDeps): Prom
   };
 
   const beatsText = plan.objectPattern.slice(0, 4).map((p) => `${p.object} ${p.beats.join(',')}`).join(' · ');
-  const info = `${result.usedFallback ? 'Rule-based' : 'Gemma'} arranged ${genreName} · ${bpm} BPM · ${beatsText}`;
+  const who = result.usedFallback ? `Rule-based (Gemma: ${result.error ?? 'unavailable'})` : `Gemma (${Math.round((result.elapsedMs ?? 0) / 1000)} s)`;
+  const info = `${who} arranged ${genreName} · ${bpm} BPM · ${beatsText}`;
   return { graph, arrangement: plan, plan: musicPlan, form, info, prompts, usedGemma: !result.usedFallback };
 }
