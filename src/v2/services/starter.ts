@@ -63,11 +63,18 @@ const TRACKS: Array<{ name: string; description: string; style: StyleId; duratio
 ];
 
 /** Finished tracks that ship as audio (no arrangement to reopen in Studio). */
-const FINISHED: Array<{ file: number; name: string; description: string }> = [
+const FINISHED: Array<{ file: number; name: string; description: string; style?: StyleId }> = [
   { file: require('../../../assets/library/sunset-jam.wav'), name: 'Sunset Jam', description: 'A full jam, produced on the phone' },
+  // Made on this phone with Stable Audio 3 (master's sample gallery).
+  { file: require('../../../assets/samples/phonk.wav'), name: 'Phonk', description: 'drift phonk · 808 · cowbell', style: 'phonk' },
+  { file: require('../../../assets/samples/mass_beat.wav'), name: 'Mass beat', description: 'dappankuthu · thappu · nadaswaram', style: 'massbeat' },
+  { file: require('../../../assets/samples/indian_classical.wav'), name: 'Indian classical', description: 'sitar · tabla · tanpura', style: 'indian_classical' },
+  { file: require('../../../assets/samples/bollywood_pop.wav'), name: 'Bollywood pop', description: 'strings · tabla · harmonium', style: 'bollywood' },
+  { file: require('../../../assets/samples/pop.wav'), name: 'Pop', description: 'punchy synths · catchy hook', style: 'pop' },
+  { file: require('../../../assets/samples/lofi.wav'), name: 'Lo-fi', description: 'dusty Rhodes · vinyl', style: 'lofi' },
 ];
 
-const MARKER = 'v2/.library-1';
+const MARKER = 'v2/.library-2';
 
 let running: Promise<void> | null = null;
 
@@ -174,7 +181,7 @@ async function run(lib: SqlLibrary): Promise<void> {
       bpm: null,
       key: null,
       scale: null,
-      style: null,
+      style: f.style ?? null,
       plan: null,
       peaks,
       lyricId: null,

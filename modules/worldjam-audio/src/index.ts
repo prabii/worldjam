@@ -55,6 +55,27 @@ export interface WorldJamAudioNative {
    * `slot` as a mono sample, trimmed and faded to loop. ~18 s on an iQOO 15.
    */
   generateTexture?(prompt: string, seconds: number, seed: number, slot: number): Promise<TextureResult>;
+  /**
+   * As above, but resolves with the samples rather than loading them into a
+   * slot — so several clips can be assembled into one longer bed in JS.
+   */
+  generateTextureClip?(
+    prompt: string,
+    seconds: number,
+    seed: number,
+  ): Promise<TextureClipResult>;
+  /** Builds music around a stereo melody WAV at `initPath`; resolves with the samples. */
+  generateFromMelody?(
+    prompt: string,
+    initPath: string,
+    seconds: number,
+    noise: number,
+    seed: number,
+  ): Promise<TextureClipResult>;
+  /** The music model that will run, and the longest clip it makes per call. */
+  textureEngine?(): { name: string; maxSeconds: number };
+  /** V2: builds music around a melody WAV (SA3 only) straight into a WAV file for the offline mixer. */
+  generateFromMelodyToFile?(prompt: string, initPath: string, seconds: number, noise: number, seed: number, outPath: string): Promise<TextureResult>;
   /** V2: generates the texture into a WAV file (for the offline mixer) instead of a pad slot. */
   generateTextureToFile?(prompt: string, seconds: number, seed: number, outPath: string): Promise<TextureResult>;
 
@@ -103,6 +124,11 @@ export interface TextureResult {
   frames?: number;
   log?: string;
   error?: string;
+}
+
+export interface TextureClipResult extends TextureResult {
+  /** Mono samples at the engine's rate, present when `ok`. */
+  pcm?: number[];
 }
 
 const native = requireOptionalNativeModule<WorldJamAudioNative>('WorldJamAudio');

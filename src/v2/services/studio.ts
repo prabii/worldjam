@@ -12,25 +12,26 @@ import { describeFeatures, roleForCapture } from '../ai/kb/rules';
 import { styleSpec } from '../ai/kb/styles';
 import { editPlan, generatePlan } from '../ai/planner';
 import { normalizeKey } from '../ai/validator';
-import { compilePlan, RENDERER_VERSION, type InventoryItem } from '../audio/planCompiler';
+import { compilePlan, RENDERER_VERSION, type CompileDeps, type CompileOptions, type InventoryItem } from '../audio/planCompiler';
 import { DEFAULT_QUANTIZE, performanceToGraph, performanceToPlan, quantizePerformance, type QuantizeSettings } from '../audio/performance';
 import { TakeScheduler, type TakeState } from '../audio/scheduler';
 import { KB_VERSION } from '../ai/kb/rules';
 import { SYSTEM_PROMPT_VERSION } from '../ai/context';
 import { captureAudioPath, getAsset } from './media';
 import { deleteCapture, mediaStore } from './capture';
-import { compileDeps, currentLlm, engineLatencyMs, renderToFile } from './engineLink';
+import { compileDeps, currentLlm, engineLatencyMs, musicEngine, renderToFile } from './engineLink';
 import { getLibrary, notifyLibraryChanged } from './library';
 import { stop as stopPlayer } from './player';
 
 export const MAX_PADS = 64;
 const DEFAULT_PAD: PadSettings = { gainDb: 0, pan: 0, pitchSemitones: 0, trimStartMs: 0, trimEndMs: null, loop: false, muted: false };
 
-export type Stage = 'ANALYZING' | 'PLANNING' | 'VALIDATING' | 'RENDERING' | 'PRODUCING' | 'MIXING';
+export type Stage = 'ANALYZING' | 'PLANNING' | 'VALIDATING' | 'COMPOSING' | 'RENDERING' | 'PRODUCING' | 'MIXING';
 export const STAGE_LABEL: Record<Stage, string> = {
   ANALYZING: 'Listening to your sounds',
   PLANNING: 'Arranging',
   VALIDATING: 'Checking the arrangement',
+  COMPOSING: 'Composing music with Stable Audio 3',
   RENDERING: 'Rendering',
   PRODUCING: 'Producing with ACE-Step',
   MIXING: 'Mixing and mastering',
@@ -85,6 +86,10 @@ interface StudioState {
   aiTiming: QuantizeSettings;
   /** Add a Stable Audio Open Small atmosphere layer (your words + the genre's instruments). */
   aiTexture: boolean;
+  /** Stable Audio 3 music under the sounds (master's genre-aware logic); on when the model is installed. */
+  aiMusic: boolean;
+  /** Seed salt of the last Generate: edits reuse it so unchanged sections come back from cache. */
+  bedSalt: number;
 }
 
 export const useStudio = create<StudioState>(() => ({
@@ -110,6 +115,8 @@ export const useStudio = create<StudioState>(() => ({
   lyricId: null,
   aiTiming: { grid: 0, strength: 0.85, swing: 0 },
   aiTexture: false,
+  aiMusic: true,
+  bedSalt: 0,
 }));
 
 /** Last hit time per pad (ms) — the soundboard flashes a pad when it sounds, live or from a take. */
@@ -447,9 +454,38 @@ function voiceLock(): { tempoBpm?: number | null; key?: NoteName | null; scale?:
   return { tempoBpm: tempo, key: k.key, scale: k.scale ?? (m.key?.includes('minor') ? 'minor' : m.key ? 'major' : null) };
 }
 
+/** The captured objects in words, for the music prompt (master's `objects` intent). */
+function soundsInWords(): string | null {
+  const sounds = Object.values(get().captures)
+    .filter((c) => c.type !== 'HUM' && c.type !== 'VOCAL')
+    .slice(0, 4)
+    .map((c) => describeFeatures(c.features))
+    .filter(Boolean);
+  return sounds.length ? sounds.join('; ') : null;
+}
+
+/** Stable Audio 3 bed for this render, when the model is installed and the user wants it. */
+function bedFor(plan: MusicPlan): CompileOptions['musicBed'] {
+  if (!get().aiMusic || !musicEngine().sa3) return null;
+  const hum = Object.values(get().captures).find((c) => (c.type === 'HUM' || c.type === 'VOCAL') && (c.features?.melody?.notes.length ?? 0) >= 3);
+  return {
+    intent: { instruction: get().prompt.trim() || null, genre: styleSpec(plan.style).label, objects: soundsInWords() },
+    salt: get().bedSalt,
+    melody: hum?.features?.melody?.notes ?? null,
+  };
+}
+
+function depsFor(token: number): CompileDeps {
+  return {
+    ...compileDeps,
+    bedMaxSeconds: musicEngine().maxSeconds,
+    onBedProgress: (done, total) => token === jobToken && set({ job: { stage: 'COMPOSING', progress: total ? done / total : 0 } }),
+  };
+}
+
 async function renderPreview(plan: MusicPlan, token: number, opts: { production?: { path: string; durationSec: number; amount: number } | null } = {}): Promise<Preview | null> {
   set({ job: { stage: 'RENDERING', progress: 0 } });
-  const graph = await compilePlan(plan, await inventory(), compileDeps, { production: opts.production ?? null, timing: get().aiTiming });
+  const graph = await compilePlan(plan, await inventory(), depsFor(token), { production: opts.production ?? null, timing: get().aiTiming, musicBed: bedFor(plan) });
   if (token !== jobToken) return null;
   set({ job: { stage: 'MIXING', progress: 0 } });
   const s = await mediaStore();
@@ -492,7 +528,10 @@ export function generate(): Promise<void> {
       currentLlm(),
     );
     if (token !== jobToken) return;
-    const plan = get().aiTexture ? withTexture(out.plan, get().prompt) : out.plan;
+    // A fresh seed for every Generate press (master): the same words never hand back a stale take.
+    set({ bedSalt: Math.floor(Math.random() * 1_000_000) });
+    const sa3 = get().aiMusic && musicEngine().sa3;
+    const plan = get().aiTexture && !sa3 ? withTexture(out.plan, get().prompt) : out.plan;
     const p = await renderPreview(plan, token);
     if (!p) return;
     const notes = out.source === 'fallback' ? [`Arranged by the built-in director${out.error ? ` (${out.error})` : ''}`] : out.repairs.length ? [`${out.repairs.length} fix(es) applied`] : [];
@@ -586,7 +625,7 @@ export function produce(): Promise<void> {
     const plan = preview.plan;
     set({ job: { stage: 'RENDERING', progress: 0 } });
     const inv = await inventory();
-    const bedGraph = await compilePlan(plan, inv, compileDeps, { excludeRoles: ['vocal'], timing: get().aiTiming });
+    const bedGraph = await compilePlan(plan, inv, depsFor(token), { excludeRoles: ['vocal'], timing: get().aiTiming, musicBed: bedFor(plan) });
     const s = await mediaStore();
     const bedUri = s.tempUri('wav');
     await renderToFile(bedGraph, bedUri);
@@ -718,6 +757,10 @@ export function setProductionAmount(amount: number): void {
 export function setLyrics(lyrics: PlanLyrics | null, lyricId: string | null = null): void {
   set({ lyrics, lyricId: lyrics ? lyricId : null });
 }
+export function setAiMusic(on: boolean): void {
+  set({ aiMusic: on });
+}
+
 export function setAiTexture(on: boolean): void {
   set({ aiTexture: on });
 }

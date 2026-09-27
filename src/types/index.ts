@@ -116,6 +116,14 @@ export interface ArrangementPlan {
    * Small), e.g. "dusty vinyl pad, warm". Written by Gemma; optional.
    */
   texture?: string;
+  /**
+   * The genre, in free text — "phonk", "Carnatic", "mass beat". Unlike
+   * `style`, which is one of six fixed values the synth tables need, this
+   * survives as written and is what the music model is asked for.
+   */
+  genre?: string;
+  /** What the user typed to get this arrangement, kept for the music prompt. */
+  request?: string;
 }
 
 export type AccompanimentLayer = 'bass' | 'chords' | 'pad' | 'arp' | 'guitar' | 'perc';

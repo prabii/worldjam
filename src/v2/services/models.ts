@@ -11,7 +11,7 @@ import { WorldJamMedia, isMediaModuleAvailable } from '../../../modules/worldjam
  * the same place each runtime already looks. Everything that is not AI works
  * without them.
  */
-export type PackId = 'director' | 'producer' | 'texture';
+export type PackId = 'director' | 'music' | 'producer' | 'texture';
 
 interface PackFile {
   name: string;
@@ -47,8 +47,21 @@ export const PACKS: ModelPack[] = [
     ],
   },
   {
+    id: 'music',
+    title: 'AI music (Stable Audio 3)',
+    body: 'Stable Audio 3 Small-Music writes genre music under your sounds, section by section, or around your hummed tune.',
+    dir: 'sa3',
+    files: [
+      { name: 'stable-audio-3-small-music-dit-0.5B-v1.0-Q5_K_M.gguf', url: `${HF}/thepatch/stable-audio-3-small-music-GGUF/resolve/main/stable-audio-3-small-music-dit-0.5B-v1.0-Q5_K_M.gguf`, bytes: 359801536, sha256: '578c51bbbf00dafbe0f4ec1f7357ea31a0672b4d3ce831ed1041e39d38c2dfcd' },
+      { name: 'stable-audio-3-small-music-same-s-v1.0-Q5_K_M.gguf', url: `${HF}/thepatch/stable-audio-3-small-music-GGUF/resolve/main/stable-audio-3-small-music-same-s-v1.0-Q5_K_M.gguf`, bytes: 82315584, sha256: '8c20eea245233258471f6928ddc6a58238887bd8bd7cc8df47b81eba77405503' },
+      { name: 'stable-audio-3-small-music-conditioner-v1.0-F32.gguf', url: `${HF}/thepatch/stable-audio-3-small-music-GGUF/resolve/main/stable-audio-3-small-music-conditioner-v1.0-F32.gguf`, bytes: 793184, sha256: 'b9c24f2617a9b9a6ef28970b6d70cd6d97f39440c7c8f85720a6ecf8f0703862' },
+      { name: 't5gemma-b-b-ul2-encoder-0.3B-v1.0-Q8_0.gguf', url: `${HF}/thepatch/t5gemma-b-b-ul2-GGUF/resolve/main/t5gemma-b-b-ul2-encoder-0.3B-v1.0-Q8_0.gguf`, bytes: 299297568, sha256: '3a182ed5d3c9d551069dd715f4f7714768a9da1783a48e0558e7bcb3b9acb1b6' },
+      { name: 't5gemma-b-b-ul2-v1.0-vocab.gguf', url: `${HF}/thepatch/t5gemma-b-b-ul2-GGUF/resolve/main/t5gemma-b-b-ul2-v1.0-vocab.gguf`, bytes: 13838496, sha256: 'd58ef75568789d5d394a67231c853803bd24778d136aa0d1990210bcdd485d32' },
+    ],
+  },
+  {
     id: 'producer',
-    title: 'AI producer',
+    title: 'AI producer (optional)',
     body: 'ACE-Step 1.5 re-produces the mix of your captures in the style you ask for.',
     dir: 'acestep',
     files: [
@@ -110,6 +123,7 @@ export type PackStatus =
 
 export const useModels = create<Record<PackId, PackStatus>>(() => ({
   director: { state: 'checking' },
+  music: { state: 'checking' },
   producer: { state: 'checking' },
   texture: { state: 'checking' },
 }));
@@ -125,6 +139,13 @@ function destUri(pack: ModelPack, file: PackFile): string {
 /** Whether the runtime can already use the pack (internal files OR adb-pushed external files). */
 async function runtimeReady(id: PackId): Promise<boolean> {
   if (id === 'director') return (await findModel()) != null;
+  if (id === 'music') {
+    try {
+      return /stable audio 3/i.test(WorldJamAudio.textureEngine?.()?.name ?? '');
+    } catch {
+      return false;
+    }
+  }
   // Native returns null when ready, a reason string otherwise.
   const check = id === 'producer' ? WorldJamAudio.aceStepUnavailableReason : WorldJamAudio.textureUnavailableReason;
   if (typeof check !== 'function') return false;

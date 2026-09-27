@@ -1,5 +1,7 @@
 import { buildArp, buildBassline, buildChordVoicing, progressionFor } from '@/audio/harmony';
 import { jitter, swingBeat } from '@/audio/groove';
+import { buildSectionPrompt, buildTexturePrompt, sectionSeed, type MusicIntent } from '@/audio/texture';
+import type { SectionKind as BedKind } from '@/audio/arrangement';
 import { hzToMidi } from '@/dsp/analysis';
 
 import type { FeatureVector } from '../contracts/library';
@@ -22,6 +24,14 @@ export interface CompileDeps {
   renderSynthStem(instrument: SynthInstrument, opts: { bpm: number; bars: number; key: string; scale: ScaleId; style: StyleId }): Promise<{ path: string; durationSec: number }>;
   /** Optional AI texture (Stable Audio Open Small); null when unavailable. */
   renderTexture?(prompt: string, seconds: number): Promise<{ path: string; durationSec: number } | null>;
+  /** Stable Audio 3 music for one section (text only); null when unavailable. */
+  renderBed?(prompt: string, seconds: number, seed: number): Promise<{ path: string; durationSec: number } | null>;
+  /** Stable Audio 3 music built around a hummed melody (master's hum-to-song); null when unavailable. */
+  renderMelodyBed?(prompt: string, notes: Array<{ midi: number; start: number; duration: number }>, seconds: number, seed: number): Promise<{ path: string; durationSec: number } | null>;
+  /** Longest clip the music engine makes per call (SA3 45 s). */
+  bedMaxSeconds?: number;
+  /** Progress while music is being generated (done/total clips). */
+  onBedProgress?(done: number, total: number): void;
 }
 
 export interface CompileOptions {
@@ -36,6 +46,87 @@ export interface CompileOptions {
    * 0..1 delays every second subdivision; tighter strength = less humanising.
    */
   timing?: { grid: 0 | 1 | 2 | 4; strength: number; swing: number } | null;
+  /**
+   * Stable Audio 3 music under the user's sounds, prompted with master's
+   * genre-aware logic (src/audio/texture.ts): the user's words, the genre's
+   * instruments, the section's colour, tempo, key and the drum policy.
+   * `salt` gives every Generate press a fresh take. With `melody` (a hum)
+   * the music is built around the tune instead. Replaces the synth backing.
+   */
+  musicBed?: { intent: MusicIntent; salt: number; melody?: Array<{ midi: number; start: number; duration: number }> | null } | null;
+}
+
+/** V2 section kinds → the kinds master's song/bed prompts know. */
+const BED_KIND: Record<string, BedKind> = { intro: 'intro', verse: 'verse', build: 'build', chorus: 'chorus', drop: 'drop', bridge: 'verse', breakdown: 'drop', outro: 'outro' };
+
+/**
+ * Master's bed logic: one generation per section kind (repeated kinds reuse
+ * it, so a chorus comes back as the same chorus), laid on the section's bar
+ * lines with short crossfades; a section longer than one clip repeats it.
+ */
+async function musicBedLayer(plan: MusicPlan, deps: CompileDeps, bed: NonNullable<CompileOptions['musicBed']>): Promise<{ sources: RenderSource[]; layers: RenderLayer[] } | null> {
+  if (!deps.renderBed) return null;
+  const spec = styleSpec(plan.style);
+  const minor = plan.scale === 'minor' || plan.scale === 'dorian' || plan.scale === 'pentatonic_minor';
+  const key = `${plan.key} ${minor ? 'minor' : 'major'}`;
+  const max = deps.bedMaxSeconds ?? 45;
+  const sources: RenderSource[] = [];
+  const events: RenderEvent[] = [];
+  const xfade = 0.12;
+
+  // Hum-to-song: one piece built around the user's own tune, repeated across the song.
+  if (bed.melody && bed.melody.length >= 3 && deps.renderMelodyBed) {
+    const barSec = 240 / plan.tempoBpm;
+    const end = bed.melody.reduce((a, n) => Math.max(a, n.start + n.duration), 0);
+    const seconds = Math.min(40, Math.max(barSec * 2, Math.ceil((end + 0.3) / barSec) * barSec));
+    const prompt = buildTexturePrompt(spec.feel, plan.tempoBpm, key, plan.caption ?? null, { ...bed.intent, instruction: `${bed.intent.instruction ?? spec.label} song with a beat, lead melody` });
+    deps.onBedProgress?.(0, 1);
+    const clip = await deps.renderMelodyBed(prompt, bed.melody, seconds, (sectionSeed(prompt) + bed.salt) % 1_000_000);
+    deps.onBedProgress?.(1, 1);
+    if (clip) {
+      sources.push({ id: 'music_bed_tune', path: clip.path });
+      const len = Math.max(1, clip.durationSec);
+      for (let t = 0; t < plan.durationSec; t += len - xfade) {
+        events.push({ timeSec: t, durationSec: Math.min(len, plan.durationSec - t + 0.5), rate: 1, gainDb: 0, fadeInSec: t === 0 ? 0.02 : xfade, fadeOutSec: xfade });
+      }
+    }
+  }
+
+  if (events.length === 0) {
+    const kinds = [...new Set(plan.sections.map((s) => BED_KIND[s.kind] ?? 'verse'))];
+    const clips = new Map<string, { id: string; durationSec: number }>();
+    let done = 0;
+    for (const kind of kinds) {
+      const longest = Math.max(...plan.sections.filter((s) => (BED_KIND[s.kind] ?? 'verse') === kind).map((s) => (s.endSec ?? 0) - (s.startSec ?? 0)));
+      const seconds = Math.min(max, Math.max(4, longest + xfade));
+      const prompt = buildSectionPrompt(kind, spec.feel, plan.tempoBpm, key, plan.caption ?? null, bed.intent);
+      deps.onBedProgress?.(done, kinds.length);
+      const clip = await deps.renderBed(prompt, seconds, (sectionSeed(prompt) + bed.salt) % 1_000_000);
+      done++;
+      if (!clip) continue;
+      const id = `music_bed_${kind}`;
+      sources.push({ id, path: clip.path });
+      clips.set(kind, { id, durationSec: clip.durationSec });
+    }
+    deps.onBedProgress?.(kinds.length, kinds.length);
+    if (clips.size === 0) return null;
+    // One layer per generated clip (a layer plays one source), events on each section's bar lines.
+    const byKind = new Map<string, RenderEvent[]>();
+    for (const s of plan.sections) {
+      const c = clips.get(BED_KIND[s.kind] ?? 'verse');
+      if (!c) continue;
+      const start = s.startSec ?? 0;
+      const end = s.endSec ?? start;
+      const list = byKind.get(c.id) ?? [];
+      for (let t = start; t < end - 0.05; t += Math.max(1, c.durationSec - xfade)) {
+        list.push({ timeSec: t, durationSec: Math.min(c.durationSec, end - t + xfade), rate: 1, gainDb: (s.energy - 1) * 4, fadeInSec: t === 0 ? 0.02 : xfade, fadeOutSec: xfade });
+      }
+      byKind.set(c.id, list);
+    }
+    const layers = [...byKind.entries()].map(([sourceId, evs]): RenderLayer => ({ id: sourceId, sourceId, bus: 'HARMONY', gainDb: -1, pan: 0, effects: [], events: evs }));
+    return { sources, layers };
+  }
+  return { sources, layers: [{ id: 'music_bed_tune', sourceId: sources[0].id, bus: 'HARMONY', gainDb: -1, pan: 0, effects: [], events }] };
 }
 
 type Timing = CompileOptions['timing'];
@@ -184,9 +275,12 @@ export async function compilePlan(plan: MusicPlan, inventory: Record<string, Inv
   const width = 0.5 + (plan.mix.width ?? 0.7) / 2;
   const bedOffsetDb = opts.production ? -9 * Math.min(1, Math.max(0, opts.production.amount)) : 0;
   const stems = new Map<string, { path: string; durationSec: number }>();
+  const bed = opts.musicBed ? await musicBedLayer(plan, deps, opts.musicBed) : null;
 
   for (const layer of plan.layers) {
     if (opts.excludeRoles?.includes(layer.role)) continue;
+    // With Stable Audio 3 music underneath, the synth backing would only muddy it.
+    if (bed && layer.source.kind === 'synth') continue;
     const active = plan.sections.filter((s) => s.layers.includes(layer.id));
     if (active.length === 0) continue;
     const bus = layer.bus ?? ROLE_BUS[layer.role];
@@ -243,6 +337,11 @@ export async function compilePlan(plan: MusicPlan, inventory: Record<string, Inv
       effects: (layer.effects ?? []).map((e) => toRenderEffect(e, bpm, reverbScale)),
       events: events.sort((a, b) => a.timeSec - b.timeSec),
     });
+  }
+
+  if (bed) {
+    sources.push(...bed.sources);
+    for (const l of bed.layers) layers.push({ ...l, gainDb: l.gainDb + bedOffsetDb, events: l.events.sort((a, b) => a.timeSec - b.timeSec) });
   }
 
   if (opts.production) {

@@ -28,9 +28,9 @@ export async function resumePendingWork(lib: SqlLibrary): Promise<void> {
   }
 }
 
-/** Captures saved before takes were normalized get the same level fix once. */
+/** Captures saved before noise cancellation get the same clean-up once. */
 async function normalizeOldCaptures(lib: SqlLibrary): Promise<void> {
-  const marker = `${FileSystem.documentDirectory ?? ''}v2/.normalized-1`;
+  const marker = `${FileSystem.documentDirectory ?? ''}v2/.cleaned-1`;
   if ((await FileSystem.getInfoAsync(marker)).exists) return;
   const caps = await lib.captures.list({ limit: 5000 });
   let failed = false;

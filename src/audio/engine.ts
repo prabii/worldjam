@@ -1,4 +1,8 @@
-import WorldJamAudio, { isNativeAudioAvailable, type TextureResult } from 'worldjam-audio';
+import WorldJamAudio, {
+  isNativeAudioAvailable,
+  type TextureClipResult,
+  type TextureResult,
+} from 'worldjam-audio';
 import type { LatencyReport } from '@/types';
 
 /**
@@ -57,6 +61,39 @@ export function textureUnavailableReason(): string | null {
   return WorldJamAudio.textureUnavailableReason();
 }
 
+/**
+ * The music model that will run, and how long a clip it makes per call.
+ *
+ * Falls back to the older engine's limits on a build that predates the
+ * query, so callers never ask for more than the engine can make.
+ */
+export function textureEngine(): { name: string; maxSeconds: number } {
+  if (typeof WorldJamAudio.textureEngine !== 'function') {
+    return { name: 'Stable Audio Open Small', maxSeconds: 11 };
+  }
+  const e = WorldJamAudio.textureEngine();
+  return { name: e.name || '', maxSeconds: e.maxSeconds > 0 ? e.maxSeconds : 11 };
+}
+
+/**
+ * Builds a full piece of music around a melody file.
+ *
+ * Needs a build that includes the call; an older one reports that plainly
+ * rather than failing silently.
+ */
+export async function generateFromMelody(
+  prompt: string,
+  initPath: string,
+  seconds: number,
+  noise: number,
+  seed: number,
+): Promise<TextureClipResult> {
+  if (typeof WorldJamAudio.generateFromMelody !== 'function') {
+    return { ok: false, error: 'this app build cannot build songs from a tune yet — reinstall the latest APK' };
+  }
+  return WorldJamAudio.generateFromMelody(prompt, initPath, seconds, noise, seed);
+}
+
 /** Generates a texture on-device straight into `slot`. See TextureGenerator.kt. */
 export async function generateTextureInto(
   prompt: string,
@@ -68,6 +105,23 @@ export async function generateTextureInto(
     return { ok: false, error: 'this app build has no texture engine' };
   }
   return WorldJamAudio.generateTexture(prompt, seconds, seed, slot);
+}
+
+/**
+ * Generates a clip and returns its samples.
+ *
+ * Used when several generations are joined into one longer buffer — a song's
+ * bed — where loading each one into a slot would overwrite the last.
+ */
+export async function generateTextureClip(
+  prompt: string,
+  seconds: number,
+  seed: number,
+): Promise<TextureClipResult> {
+  if (typeof WorldJamAudio.generateTextureClip !== 'function') {
+    return { ok: false, error: 'this app build has no texture engine' };
+  }
+  return WorldJamAudio.generateTextureClip(prompt, seconds, seed);
 }
 
 export function loadSample(slot: number, pcm: number[], gain = 1): boolean {

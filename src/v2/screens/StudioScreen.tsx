@@ -17,9 +17,10 @@ import { useNav } from '../nav/store';
 import { capturePeaks } from '../services/media';
 import { stop as stopPlayer, toggle, usePlayer } from '../services/player';
 import { useVoicePrompt } from '../services/speech';
+import { musicEngine } from '../services/engineLink';
 import {
   MAX_PADS, STAGE_LABEL, cancelJob, clearTake, editPreview, enhanceTake, generate, newSession, openSession, pauseTake, playTake,
-  plannerCaptures, previewSuggestion, produce, removeSource, renderTake, rerender, saveTrack, setAiTexture, setAiTiming, setBpm, setDuration,
+  plannerCaptures, previewSuggestion, produce, removeSource, renderTake, rerender, saveTrack, setAiMusic, setAiTexture, setAiTiming, setBpm, setDuration,
   setMetronome, setMode, setPad, setPadLayout, setProductionAmount, setPrompt, setQuantize, setRole, setStyle, startRecording,
   stopRecording, stopTake, tapTempo, triggerPad, usePadHits, useStudio, useSuggestionAsTake, useSuggestionInAi,
 } from '../services/studio';
@@ -345,6 +346,8 @@ function AiPanel() {
   const error = useStudio((s) => s.error);
   const aiTiming = useStudio((s) => s.aiTiming);
   const aiTexture = useStudio((s) => s.aiTexture);
+  const aiMusic = useStudio((s) => s.aiMusic);
+  const engine = useMemo(() => musicEngine(), []);
   const voice = useVoicePrompt((t) => setPrompt(t));
 
   return (
@@ -372,7 +375,11 @@ function AiPanel() {
       </View>
       <LengthPicker value={durationSec} onChange={setDuration} />
       <TimingControls value={aiTiming} onChange={setAiTiming} styleFeel />
-      <Chip label={aiTexture ? 'AI texture on (Stable Audio, +~20 s)' : 'AI texture off'} selected={aiTexture} onPress={() => setAiTexture(!aiTexture)} />
+      {engine.sa3 ? (
+        <Chip label={aiMusic ? 'Stable Audio 3 music on — genre music under your sounds' : 'Stable Audio 3 music off'} selected={aiMusic} onPress={() => setAiMusic(!aiMusic)} />
+      ) : (
+        <Chip label={aiTexture ? 'AI texture on (Stable Audio, +~20 s)' : 'AI texture off'} selected={aiTexture} onPress={() => setAiTexture(!aiTexture)} />
+      )}
       <Button label="Generate track" kind="primary" icon="ai" disabled={!!job} onPress={() => void generate()} />
       <JobBar />
       {error && !job ? <Text style={[font.label, { color: color.error }]}>{error}</Text> : null}

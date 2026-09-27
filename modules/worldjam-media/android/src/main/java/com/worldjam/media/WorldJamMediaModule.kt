@@ -82,6 +82,19 @@ class WorldJamMediaModule : Module() {
             Wav.peaks(Wav.read(File(path)), buckets).toList()
         }
 
+        AsyncFunction("cleanWav") { path: String, targetDb: Double, maxGainDb: Double ->
+            // Room noise out (spectral subtraction + soft gate), then level: only the captured sound stays.
+            val src = File(path)
+            var pcm = Wav.read(src)
+            if (pcm.channels > 1) pcm = Wav.toMono(pcm)
+            val reducedDb = Denoise.clean(pcm.data, pcm.sampleRate)
+            val gainDb = Wav.normalize(pcm, targetDb, maxGainDb)
+            val tmp = File(src.parentFile, src.name + ".clean")
+            Wav.write16(tmp, pcm)
+            if (!tmp.renameTo(src)) { src.delete(); tmp.renameTo(src) }
+            mapOf("noiseReducedDb" to reducedDb, "gainDb" to gainDb)
+        }
+
         AsyncFunction("normalizeWav") { path: String, targetDb: Double, maxGainDb: Double ->
             val src = File(path)
             val pcm = Wav.read(src)

@@ -125,10 +125,16 @@ export interface CaptureMeta {
 export async function normalizeTake(path: string): Promise<boolean> {
   if (!isMediaModuleAvailable) return false;
   try {
-    await WorldJamMedia.normalizeWav(path, -1, 42);
+    // Noise cancellation first (only the captured object/voice stays), then level.
+    await WorldJamMedia.cleanWav(path, -1, 42);
     return true;
   } catch {
-    return false;
+    try {
+      await WorldJamMedia.normalizeWav(path, -1, 42);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

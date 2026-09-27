@@ -179,3 +179,38 @@ describe('song length', () => {
     }
   });
 });
+
+describe('Stable Audio 3 music bed (master logic)', () => {
+  const inventory = Object.fromEntries(caps.map((c) => [c.id, { path: `/x/${c.id}.wav`, durationSec: c.features!.durationSec, features: c.features }]));
+
+  it('generates one clip per section kind with genre-aware prompts and replaces the synth backing', async () => {
+    const plan = fallbackPlan({ captures: caps, intent: interpretPrompt('', []), style: 'phonk', durationSec: 40 });
+    const prompts: string[] = [];
+    const deps = {
+      renderSynthStem: jest.fn(async () => ({ path: '/x/stem.wav', durationSec: 8 })),
+      bedMaxSeconds: 45,
+      renderBed: jest.fn(async (prompt: string, seconds: number) => {
+        prompts.push(prompt);
+        return { path: `/x/bed${prompts.length}.wav`, durationSec: seconds };
+      }),
+    };
+    const g = await compilePlan(plan, inventory, deps, { musicBed: { intent: { instruction: 'dark drift night', genre: 'Phonk', objects: 'bright metallic hits' }, salt: 1 } });
+    const kinds = new Set(plan.sections.map((s) => s.kind));
+    expect(deps.renderBed).toHaveBeenCalledTimes(kinds.size);
+    expect(prompts[0]).toContain('dark drift night');
+    expect(prompts[0]).toMatch(/BPM/);
+    expect(prompts[0]).toContain(plan.key);
+    expect(g.layers.some((l) => l.sourceId.startsWith('synth_'))).toBe(false);
+    const bed = g.layers.filter((l) => l.sourceId.startsWith('music_bed_'));
+    expect(bed.length).toBe(kinds.size);
+    const covered = bed.flatMap((l) => l.events);
+    for (const s of plan.sections) expect(covered.some((e) => Math.abs(e.timeSec - (s.startSec ?? 0)) < 0.01)).toBe(true);
+  });
+
+  it('falls back to the synth backing when the music model is not there', async () => {
+    const plan = fallbackPlan({ captures: caps, intent: interpretPrompt('', []), style: 'pop', durationSec: 30 });
+    const deps = { renderSynthStem: jest.fn(async () => ({ path: '/x/stem.wav', durationSec: 8 })), renderBed: jest.fn(async () => null) };
+    const g = await compilePlan(plan, inventory, deps, { musicBed: { intent: {}, salt: 0 } });
+    expect(g.layers.some((l) => l.sourceId.startsWith('music_bed_'))).toBe(false);
+  });
+});

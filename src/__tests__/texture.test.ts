@@ -1,12 +1,15 @@
 import {
   MAX_TEXTURE_SECONDS,
+  buildSectionPrompt,
   buildTexturePrompt,
   sanitiseTexture,
+  sectionSeed,
   textureBars,
   textureEvents,
   textureSeconds,
   textureSeed,
 } from '@/audio/texture';
+import type { SectionKind } from '@/audio/arrangement';
 import { validatePlan } from '@/ai/schema';
 import type { WorldJamObject } from '@/types';
 
@@ -44,7 +47,8 @@ describe('textureEvents', () => {
 describe('buildTexturePrompt', () => {
   it('uses the model description and adds tempo, key and no drums', () => {
     const p = buildTexturePrompt('lofi', 80, 'C minor', 'dusty vinyl chord pad, warm');
-    expect(p).toBe('dusty vinyl chord pad, warm, no drums, 80 BPM, C minor');
+    // "no drums" goes last, where it reads as an instruction, as in section prompts.
+    expect(p).toBe('dusty vinyl chord pad, warm, 80 BPM, C minor, no drums');
   });
 
   it('falls back to a style default when the model gave none', () => {
@@ -119,5 +123,80 @@ describe('schema keeps a model-written texture', () => {
       80,
     );
     expect(plan?.texture).toBeUndefined();
+  });
+});
+
+describe('section prompts', () => {
+  const KINDS: SectionKind[] = [
+    'intro',
+    'verse',
+    'build',
+    'chorus',
+    'drop',
+    'outro',
+  ];
+
+  it.each(KINDS)('never asks for drums in a %s', (kind) => {
+    const p = buildSectionPrompt(kind, 'chill', 92, 'F minor');
+    expect(p).toMatch(/no drums/i);
+    // Stated once, at the end, not repeated from the style text.
+    expect(p.match(/no drums/gi)).toHaveLength(1);
+  });
+
+  it.each(KINDS)('names the tempo and key in a %s', (kind) => {
+    const p = buildSectionPrompt(kind, 'lofi', 84, 'C minor');
+    expect(p).toContain('84 BPM');
+    expect(p).toContain('C minor');
+  });
+
+  it('gives each section kind a different prompt', () => {
+    const prompts = KINDS.map((k) => buildSectionPrompt(k, 'chill', 92, 'A minor'));
+    expect(new Set(prompts).size).toBe(KINDS.length);
+  });
+
+  it('describes a chorus as bigger than an intro', () => {
+    expect(buildSectionPrompt('intro', 'chill', 92, null)).toMatch(/sparse|air/i);
+    expect(buildSectionPrompt('chorus', 'chill', 92, null)).toMatch(/full|bright|big/i);
+  });
+
+  it('keeps the style character across sections', () => {
+    const verse = buildSectionPrompt('verse', 'jazz', 110, null);
+    expect(verse).toMatch(/jazz|upright|smoky/i);
+  });
+
+  it('prefers a model-written description over the style default', () => {
+    const p = buildSectionPrompt('verse', 'chill', 92, null, 'rusty music box');
+    expect(p).toContain('rusty music box');
+  });
+
+  it('does not double up when the model already said no drums', () => {
+    const p = buildSectionPrompt('verse', 'chill', 92, null, 'warm pad, no drums');
+    expect(p.match(/no drums/gi)).toHaveLength(1);
+  });
+
+  it('omits the key when none is known', () => {
+    const p = buildSectionPrompt('verse', 'chill', 92, null);
+    expect(p).toContain('92 BPM');
+    expect(p).toMatch(/no drums$/);
+  });
+
+  it('gives the same section kind the same seed, so reuse is identical', () => {
+    const a = buildSectionPrompt('chorus', 'chill', 92, 'F minor');
+    const b = buildSectionPrompt('chorus', 'chill', 92, 'F minor');
+    expect(sectionSeed(a)).toBe(sectionSeed(b));
+  });
+
+  it('gives different sections different seeds', () => {
+    const verse = sectionSeed(buildSectionPrompt('verse', 'chill', 92, 'F minor'));
+    const chorus = sectionSeed(buildSectionPrompt('chorus', 'chill', 92, 'F minor'));
+    expect(verse).not.toBe(chorus);
+  });
+
+  it('stays short enough for the encoder', () => {
+    for (const kind of KINDS) {
+      // The T5 encoder takes 64 tokens; roughly four characters per token.
+      expect(buildSectionPrompt(kind, 'cinematic', 92, 'F# minor').length)
+        .toBeLessThan(200);
+    }
   });
 });

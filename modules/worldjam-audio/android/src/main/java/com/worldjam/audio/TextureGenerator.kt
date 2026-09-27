@@ -28,23 +28,63 @@ class TextureGenerator(private val context: Context) {
         const val DIT = "stable-audio-open-small-dit-0.3B-v1.0-Q5_K_M.gguf"
         const val T5 = "t5-base-encoder-0.1B-v1.0-Q5_K_M.gguf"
         const val AE = "stable-audio-open-small-oobleck-v1.0-Q5_K_M.gguf"
-        private const val TIMEOUT_S = 150L
+
+        /**
+         * Stable Audio 3 Small-Music, the preferred engine.
+         *
+         * A general music model rather than a finetune, so it follows a genre
+         * instead of pulling every request toward one sound. Measured on the
+         * dev phone: 30 s of audio in ~30–40 s at 8 steps, 6 threads — close to
+         * real time, where the older model managed 11 s in 19 s. It also makes
+         * up to ~45 s per call, so a song section no longer has to loop a clip.
+         */
+        val SA3_FILES = listOf(
+            "stable-audio-3-small-music-dit-0.5B-v1.0-Q5_K_M.gguf",
+            "stable-audio-3-small-music-same-s-v1.0-Q5_K_M.gguf",
+            "stable-audio-3-small-music-conditioner-v1.0-F32.gguf",
+            "t5gemma-b-b-ul2-encoder-0.3B-v1.0-Q8_0.gguf",
+            "t5gemma-b-b-ul2-v1.0-vocab.gguf",
+        )
+        private const val SA3_STEPS = 8
+        const val SA3_MAX_SECONDS = 45.0
+        const val SAO_MAX_SECONDS = 11.0
+
+        private const val TIMEOUT_S = 180L
     }
 
-    private val binary: File get() = File(context.applicationInfo.nativeLibraryDir, "libsatgen.so")
-    /** Internal files first (the in-app downloader), then external files (adb-pushable on release builds). */
-    private val modelsDir: File get() = listOfNotNull(
-        File(context.filesDir, "sao"),
-        context.getExternalFilesDir(null)?.let { File(it, "sao") },
-    ).firstOrNull { dir -> listOf(DIT, T5, AE).all { File(dir, it).isFile } } ?: File(context.filesDir, "sao")
+    enum class Engine(val label: String) {
+        SA3("Stable Audio 3 Small-Music"),
+        SAO("Stable Audio Open Small"),
+    }
+
+    private val sa3Binary: File get() = File(context.applicationInfo.nativeLibraryDir, "libsa3gen.so")
+    private val saoBinary: File get() = File(context.applicationInfo.nativeLibraryDir, "libsatgen.so")
+    // Models may sit in the app's private files dir (in-app download) or its
+    // external files dir (adb-pushed onto a release build); use whichever is complete.
+    private fun dirWith(name: String, files: List<String>): File =
+        listOfNotNull(File(context.filesDir, name), context.getExternalFilesDir(null)?.let { File(it, name) })
+            .firstOrNull { d -> files.all { File(d, it).isFile } } ?: File(context.filesDir, name)
+    private val sa3Dir: File get() = dirWith("sa3", SA3_FILES)
+    private val modelsDir: File get() = dirWith("sao", listOf(DIT, T5, AE))
+
+    /** The best engine whose binary and weights are all present, or null. */
+    fun engine(): Engine? {
+        if (sa3Binary.exists() && SA3_FILES.all { File(sa3Dir, it).exists() }) return Engine.SA3
+        if (saoBinary.exists() && listOf(DIT, T5, AE).all { File(modelsDir, it).exists() }) {
+            return Engine.SAO
+        }
+        return null
+    }
+
+    /** Longest clip the active engine makes in one call. */
+    fun maxSeconds(): Double = if (engine() == Engine.SA3) SA3_MAX_SECONDS else SAO_MAX_SECONDS
 
     /** Why generation cannot run, or null when it can. */
     fun unavailableReason(): String? {
-        if (!binary.exists()) return "texture engine not packaged in this build"
-        for (name in listOf(DIT, T5, AE)) {
-            if (!File(modelsDir, name).exists()) return "model file missing: sao/$name"
-        }
-        return null
+        if (engine() != null) return null
+        if (!saoBinary.exists() && !sa3Binary.exists()) return "music engine not packaged in this build"
+        val missing = SA3_FILES.firstOrNull { !File(sa3Dir, it).exists() }
+        return if (missing != null) "model file missing: sa3/$missing" else "model file missing: sao/$DIT"
     }
 
     data class Result(val pcm: FloatArray, val elapsedMs: Long, val log: String)
@@ -54,23 +94,74 @@ class TextureGenerator(private val context: Context) {
      * PCM at [targetRate], trimmed to exactly [seconds] with short fades so it
      * loops without a click. Blocking: call from a background thread.
      */
-    fun generate(prompt: String, seconds: Double, seed: Int, targetRate: Int, threads: Int, keepWavAt: File? = null): Result {
+    /**
+     * [initPath], when given, is a stereo WAV the music is built around — a
+     * sung or hummed melody. The model starts from it rather than from noise,
+     * and [initNoise] sets how far it may wander: lower stays closer to the
+     * tune. Measured on the dev phone: at 0.6 and 0.8 alike the sung note is
+     * among the three loudest pitches on every beat of the result.
+     */
+    fun generate(
+        prompt: String,
+        seconds: Double,
+        seed: Int,
+        targetRate: Int,
+        threads: Int,
+        initPath: String? = null,
+        initNoise: Double = 0.7,
+        keepWavAt: File? = null,
+    ): Result {
         unavailableReason()?.let { throw IllegalStateException(it) }
 
         val out = File(context.cacheDir, "texture-${System.currentTimeMillis()}.wav")
         val started = System.nanoTime()
-        val pb = ProcessBuilder(
-            binary.absolutePath,
-            "--models-dir", modelsDir.absolutePath,
-            "--model", "arc",
-            "--encoding", "Q5_K_M",
+
+        val engine = engine() ?: throw IllegalStateException("no music engine available")
+        // Ask for a little more than needed so the trim below never runs short.
+        val want = minOf(maxSeconds(), seconds + 0.25)
+
+        val args = when (engine) {
+            Engine.SA3 -> mutableListOf(
+                sa3Binary.absolutePath,
+                "--models-dir", sa3Dir.absolutePath,
+                "--model", "small-music",
+                // The DiT and decoder at Q5; the shared text encoder is only
+                // published at Q8 and above, so its tier is named separately.
+                "--encoding", "q5_k_m",
+                "--t5-encoding", "q8_0",
+                "--ae-encoding", "q5_k_m",
+                "--steps", SA3_STEPS.toString(),
+                "--threads", threads.toString(),
+            ).apply {
+                // With a source melody the output takes its length; asking for
+                // a duration as well is rejected.
+                if (initPath != null) {
+                    addAll(listOf("--init", initPath, "--init-noise-level", String.format("%.2f", initNoise)))
+                } else {
+                    addAll(listOf("--duration", String.format("%.2f", want)))
+                }
+            }
+            Engine.SAO -> {
+                if (initPath != null) {
+                    throw IllegalStateException("building around a melody needs Stable Audio 3")
+                }
+                mutableListOf(
+                saoBinary.absolutePath,
+                "--models-dir", modelsDir.absolutePath,
+                "--model", "arc",
+                "--encoding", "Q5_K_M",
+                "--seconds", String.format("%.2f", want),
+                )
+            }
+        }
+
+        args += listOf(
             "--prompt", prompt,
-            // The model makes up to ~11 s; ask for a little more than the loop
-            // so the trim below never runs short.
-            "--seconds", String.format("%.2f", minOf(11.0, seconds + 0.25)),
             "--seed", seed.toString(),
             "--out", out.absolutePath,
         )
+
+        val pb = ProcessBuilder(args)
         pb.environment()["SA3_THREADS"] = threads.toString()
         pb.redirectErrorStream(true)
 

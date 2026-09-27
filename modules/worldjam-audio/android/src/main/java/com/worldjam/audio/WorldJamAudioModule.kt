@@ -142,6 +142,69 @@ class WorldJamAudioModule : Module() {
             }.apply { name = "worldjam-texture" }.start()
         }
 
+        /**
+         * Which music model will run, and the longest clip it makes per call.
+         *
+         * The UI names the model actually in use rather than a hard-coded one,
+         * and the song builder sizes its requests to what the engine can make.
+         */
+        Function("textureEngine") {
+            val gen = textureGen()
+            val engine = gen?.engine()
+            mapOf(
+                "name" to (engine?.label ?: ""),
+                "maxSeconds" to (gen?.maxSeconds() ?: 0.0),
+            )
+        }
+
+        AsyncFunction("generateTextureClip") { prompt: String, seconds: Double, seed: Int, promise: Promise ->
+            val gen = textureGen()
+            if (gen == null) {
+                promise.resolve(mapOf("ok" to false, "error" to "no app context"))
+                return@AsyncFunction
+            }
+            Thread {
+                try {
+                    val r = gen.generate(prompt, seconds, seed, nativeSampleRate(), 6)
+                    promise.resolve(mapOf("ok" to true, "elapsedMs" to r.elapsedMs.toDouble(), "frames" to r.pcm.size, "pcm" to r.pcm.map { it.toDouble() }, "log" to r.log))
+                } catch (e: Throwable) {
+                    promise.resolve(mapOf("ok" to false, "error" to (e.message ?: e.toString())))
+                }
+            }.apply { name = "worldjam-texture-clip" }.start()
+        }
+
+        AsyncFunction("generateFromMelody") { prompt: String, initPath: String, seconds: Double, noise: Double, seed: Int, promise: Promise ->
+            val gen = textureGen()
+            if (gen == null) {
+                promise.resolve(mapOf("ok" to false, "error" to "no app context"))
+                return@AsyncFunction
+            }
+            Thread {
+                try {
+                    val r = gen.generate(prompt, seconds, seed, nativeSampleRate(), 6, initPath.removePrefix("file://"), noise)
+                    promise.resolve(mapOf("ok" to true, "elapsedMs" to r.elapsedMs.toDouble(), "frames" to r.pcm.size, "pcm" to r.pcm.map { it.toDouble() }))
+                } catch (e: Throwable) {
+                    promise.resolve(mapOf("ok" to false, "error" to (e.message ?: e.toString())))
+                }
+            }.apply { name = "worldjam-melody" }.start()
+        }
+
+        AsyncFunction("generateFromMelodyToFile") { prompt: String, initPath: String, seconds: Double, noise: Double, seed: Int, outPath: String, promise: Promise ->
+            val gen = textureGen()
+            if (gen == null) {
+                promise.resolve(mapOf("ok" to false, "error" to "no app context"))
+                return@AsyncFunction
+            }
+            Thread {
+                try {
+                    val r = gen.generate(prompt, seconds, seed, nativeSampleRate(), 6, initPath.removePrefix("file://"), noise, java.io.File(outPath))
+                    promise.resolve(mapOf("ok" to java.io.File(outPath).isFile, "elapsedMs" to r.elapsedMs.toDouble(), "frames" to r.pcm.size, "log" to r.log))
+                } catch (e: Throwable) {
+                    promise.resolve(mapOf("ok" to false, "error" to (e.message ?: e.toString())))
+                }
+            }.apply { name = "worldjam-melody-file" }.start()
+        }
+
         AsyncFunction("generateTextureToFile") { prompt: String, seconds: Double, seed: Int, outPath: String, promise: Promise ->
             val gen = textureGen()
             if (gen == null) {
@@ -150,7 +213,7 @@ class WorldJamAudioModule : Module() {
             }
             Thread {
                 try {
-                    val r = gen.generate(prompt, seconds, seed, nativeSampleRate(), 6, java.io.File(outPath))
+                    val r = gen.generate(prompt, seconds, seed, nativeSampleRate(), 6, keepWavAt = java.io.File(outPath))
                     promise.resolve(mapOf("ok" to java.io.File(outPath).isFile, "elapsedMs" to r.elapsedMs.toDouble(), "frames" to r.pcm.size, "log" to r.log))
                 } catch (e: Throwable) {
                     promise.resolve(mapOf("ok" to false, "error" to (e.message ?: e.toString())))

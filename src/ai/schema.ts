@@ -5,6 +5,7 @@ import type {
   WorldJamObject,
 } from '@/types';
 import { sanitiseTexture } from '@/audio/texture';
+import { matchGenre } from '@/audio/genres';
 
 /**
  * The validator that stands between the model and the audio engine.
@@ -36,6 +37,21 @@ export const BPM_MAX = 180;
 export interface ValidationResult {
   plan: ArrangementPlan | null;
   repairs: string[];
+}
+
+/**
+ * Rejects the prompt's own placeholders echoed back.
+ *
+ * The example JSON shows `"genre":"<genre>"` so a small model has a shape to
+ * copy without a real value to copy — but it sometimes copies the placeholder
+ * itself. Sanitising strips the angle brackets, leaving "genre" or "backing
+ * music for that genre", which would otherwise become the music prompt.
+ */
+function notPlaceholder(text: string | null): string | null {
+  if (!text) return null;
+  const t = text.toLowerCase().trim();
+  if (t === 'genre' || t.includes('that genre') || t.startsWith('backing music for')) return null;
+  return text;
 }
 
 function clamp(n: number, lo: number, hi: number): number {
@@ -181,9 +197,26 @@ export function validatePlan(
     repairs.push('unsupported accompaniment layers removed');
   }
 
-  // --- style ---
-  const style = STYLES.includes(raw.style as Style) ? (raw.style as Style) : 'chill';
-  if (style !== raw.style) repairs.push(`unknown style "${raw.style}" defaulted to chill`);
+  // --- genre and style ---
+  // The genre survives as free text; it is what the music model is asked for.
+  // The style must be one of six, because the synth and groove tables are
+  // keyed by it — so an unknown style is mapped to the genre's nearest one
+  // rather than flattened to chill, which is what used to turn phonk into a
+  // pad.
+  const genreText =
+    notPlaceholder(sanitiseTexture(raw.genre)) ??
+    (STYLES.includes(raw.style as Style) ? null : sanitiseTexture(raw.style));
+  const profile = matchGenre(genreText);
+  let style: Style;
+  if (STYLES.includes(raw.style as Style)) {
+    style = raw.style as Style;
+  } else if (profile) {
+    style = profile.style;
+    repairs.push(`style "${raw.style}" mapped to ${style} via genre ${profile.name}`);
+  } else {
+    style = 'chill';
+    repairs.push(`unknown style "${raw.style}" defaulted to chill`);
+  }
 
   return {
     plan: {
@@ -195,7 +228,8 @@ export function validatePlan(
       style,
       source: 'gemma',
       reasoning: typeof raw.reasoning === 'string' ? raw.reasoning : undefined,
-      texture: sanitiseTexture(raw.texture) ?? undefined,
+      texture: notPlaceholder(sanitiseTexture(raw.texture)) ?? undefined,
+      genre: genreText ?? undefined,
     },
     repairs,
   };
