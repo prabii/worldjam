@@ -3,6 +3,9 @@ import type { PlannerCapture } from '../ai/fallback';
 import { fallbackPlan } from '../ai/fallback';
 import { suggestPatterns, suggestionToPerformance } from '../ai/guide';
 import { interpretPrompt } from '../ai/interpret';
+import { generatePlan } from '../ai/planner';
+import { applyPatch } from '../ai/patches';
+import { captureRefs } from '../ai/fallback';
 import { STYLES } from '../ai/kb/styles';
 import { textToLyrics } from '../ai/lyricsV2';
 import { compilePlan } from '../audio/planCompiler';
@@ -145,12 +148,22 @@ describe('karaoke timing', () => {
 
 describe('genre lock', () => {
   it('keeps the genre the user chose even when the model answers another', async () => {
-    const { generatePlan } = await import('../ai/planner');
     const reply = JSON.stringify({ title: 'X', style: 'lofi', tempoBpm: 140, key: 'C#', scale: 'minor', durationSec: 30, sections: [{ kind: 'verse', bars: 16, energy: 0.8, layers: ['a'] }], layers: [{ id: 'a', source: 'c1', role: 'kick', gainDb: 0, pattern: 'X...X...X...X...' }] });
     const llm = { model: 'fake', complete: async () => reply };
     const out = await generatePlan({ captures: caps, prompt: 'something dark', style: 'phonk', durationSec: 30 }, llm);
     expect(out.plan.style).toBe('phonk');
     const byWords = await generatePlan({ captures: caps, prompt: 'a bhangra party', style: null, durationSec: 30 }, llm);
     expect(byWords.plan.style).toBe('bhangra');
+  });
+});
+
+describe('tempo edits', () => {
+  it('moves tempo at most 20% per edit and keeps the song length', () => {
+    const plan = fallbackPlan({ captures: caps, intent: interpretPrompt('', []), style: 'phonk', durationSec: 40 });
+    const bars = (p: typeof plan) => p.sections.reduce((n, s) => n + s.bars, 0);
+    const lenSec = (p: typeof plan) => (bars(p) * 4 * 60) / p.tempoBpm;
+    const out = applyPatch(plan, { operations: [{ type: 'change_tempo', tempoBpm: 75 }] }, { captures: captureRefs(caps), durationSec: 40, style: 'phonk' });
+    expect(out.plan.tempoBpm).toBe(Math.round(plan.tempoBpm * 0.8));
+    expect(Math.abs(lenSec(out.plan) - lenSec(plan))).toBeLessThan(6);
   });
 });

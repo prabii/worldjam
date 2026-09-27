@@ -1,4 +1,5 @@
 import type { LayerRole, MusicPlan, PatchOp, PlanPatch } from '../contracts/musicPlan';
+import { PLAN_LIMITS } from '../contracts/musicPlan';
 import { ROLE_BUS } from './kb/rules';
 import { styleSpec } from './kb/styles';
 import { normalizePattern, validatePlan, type ValidateContext } from './validator';
@@ -68,10 +69,17 @@ export function applyPatch(plan: MusicPlan, patch: PlanPatch, ctx: ValidateConte
         applied.push(label);
         break;
       }
-      case 'change_tempo':
-        next.tempoBpm = op.tempoBpm;
+      case 'change_tempo': {
+        // One edit moves tempo at most ±20% (a small model's "slower" is often half-time),
+        // and bars are rescaled so the song keeps its length.
+        const old = next.tempoBpm;
+        const bpm = Math.round(Math.min(old * 1.2, Math.max(old * 0.8, op.tempoBpm, PLAN_LIMITS.tempoMin), PLAN_LIMITS.tempoMax));
+        next.tempoBpm = bpm;
+        const ratio = bpm / old;
+        next.sections = next.sections.map((sec) => ({ ...sec, bars: Math.max(1, Math.round(sec.bars * ratio)) }));
         applied.push(label);
         break;
+      }
       case 'change_section_energy': {
         const s = next.sections.find((x) => x.id === op.sectionId);
         if (!s) {
