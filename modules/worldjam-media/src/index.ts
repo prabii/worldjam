@@ -87,6 +87,8 @@ interface NativeWorldJamMedia {
   decodeToWav(inputPath: string, outputPath: string, options: DecodeOptions): Promise<DecodeResult>;
   extractFrame(videoPath: string, outputJpegPath: string, options: FrameOptions): Promise<FrameResult>;
   wavPeaks(path: string, buckets: number): Promise<number[]>;
+  /** Rewrites a WAV in place at a healthy level (see Wav.normalize); returns the gain applied in dB. */
+  normalizeWav(path: string, targetDb: number, maxGainDb: number): Promise<number>;
   readPcm(path: string, maxSeconds: number, sampleRate: number): Promise<PcmResult>;
   sha256(path: string): Promise<string>;
   /** graphJson = JSON.stringify(RenderGraph). Writes a stereo 16-bit WAV. */
@@ -114,6 +116,7 @@ export const WorldJamMedia = {
   extractFrame: (videoPath: string, outputJpegPath: string, options: FrameOptions = {}) =>
     mod().extractFrame(videoPath, outputJpegPath, options),
   wavPeaks: (path: string, buckets = 200) => mod().wavPeaks(path, buckets),
+  normalizeWav: (path: string, targetDb = -1, maxGainDb = 42) => mod().normalizeWav(path, targetDb, maxGainDb),
   readPcm: (path: string, maxSeconds = 30, sampleRate = 48000) => mod().readPcm(path, maxSeconds, sampleRate),
   sha256: (path: string) => mod().sha256(path),
   renderMix: (graph: RenderGraph, outputPath: string, peakBuckets = 200) =>

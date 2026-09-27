@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { FlatList, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -20,7 +20,8 @@ import { color, font, radius, space } from '../theme';
 export function SourcePickerScreen({ sessionId }: { sessionId: string }) {
   const insets = useSafeAreaInsets();
   const { pop, push } = useNav();
-  const inSession = useStudio((s) => new Set(s.session?.sources.map((x) => x.captureId) ?? []));
+  const sources = useStudio((s) => s.session?.sources);
+  const inSession = useMemo(() => new Set(sources?.map((x) => x.captureId) ?? []), [sources]);
   const [text, setText] = useState('');
   const [search, setSearch] = useState('');
   const [picked, setPicked] = useState<string[]>([]);

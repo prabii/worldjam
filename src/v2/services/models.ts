@@ -125,8 +125,14 @@ function destUri(pack: ModelPack, file: PackFile): string {
 /** Whether the runtime can already use the pack (internal files OR adb-pushed external files). */
 async function runtimeReady(id: PackId): Promise<boolean> {
   if (id === 'director') return (await findModel()) != null;
-  if (id === 'producer') return !(WorldJamAudio.aceStepUnavailableReason?.() ?? 'unavailable');
-  return !(WorldJamAudio.textureUnavailableReason?.() ?? 'unavailable');
+  // Native returns null when ready, a reason string otherwise.
+  const check = id === 'producer' ? WorldJamAudio.aceStepUnavailableReason : WorldJamAudio.textureUnavailableReason;
+  if (typeof check !== 'function') return false;
+  try {
+    return check() == null;
+  } catch {
+    return false;
+  }
 }
 
 export async function refreshModelStatus(): Promise<void> {

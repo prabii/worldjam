@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  KeyboardAvoidingView,
+  Keyboard,
   Modal,
   Pressable,
   ScrollView,
@@ -18,6 +18,23 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { accentGradient, color, font, radius, space, touch } from '../theme';
 import { Icon, type IconName } from './Icon';
+
+/**
+ * Keyboard height in dp. Android 15+ draws edge-to-edge, so the window no
+ * longer resizes for the keyboard — screens pad themselves with this instead.
+ */
+export function useKeyboardHeight(): number {
+  const [h, setH] = useState(0);
+  useEffect(() => {
+    const show = Keyboard.addListener('keyboardDidShow', (e) => setH(e.endCoordinates.height));
+    const hide = Keyboard.addListener('keyboardDidHide', () => setH(0));
+    return () => {
+      show.remove();
+      hide.remove();
+    };
+  }, []);
+  return h;
+}
 
 /** Full-height screen on the V2 background, with safe-area top padding. */
 export function Screen({
@@ -255,20 +272,23 @@ export function Sheet({
   children: React.ReactNode;
 }) {
   const insets = useSafeAreaInsets();
+  const kb = useKeyboardHeight();
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
-      <KeyboardAvoidingView behavior="height" style={{ flex: 1 }}>
+      <View style={{ flex: 1 }}>
         <Pressable style={styles.scrim} onPress={onClose} accessibilityLabel="Close" />
-        <View style={[styles.sheet, { paddingBottom: insets.bottom + space.xl }]}>
+        <View style={[styles.sheet, { paddingBottom: (kb > 0 ? kb : insets.bottom) + space.xl, maxHeight: '92%' }]}>
           <View style={styles.grabber} />
           {title ? (
             <Text style={[font.heading, { marginBottom: space.lg }]} accessibilityRole="header">
               {title}
             </Text>
           ) : null}
-          {children}
+          <ScrollView keyboardShouldPersistTaps="handled" bounces={false} showsVerticalScrollIndicator={false}>
+            {children}
+          </ScrollView>
         </View>
-      </KeyboardAvoidingView>
+      </View>
     </Modal>
   );
 }

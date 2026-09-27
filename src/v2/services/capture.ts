@@ -117,10 +117,26 @@ export interface CaptureMeta {
   inLibrary: boolean;
 }
 
+/**
+ * The mic is opened unprocessed (clean transients for pads), which on phones
+ * records very quietly — bring every take up to a healthy level before it is
+ * analysed, played or used in Studio. Older builds skip this silently.
+ */
+export async function normalizeTake(path: string): Promise<boolean> {
+  if (!isMediaModuleAvailable) return false;
+  try {
+    await WorldJamMedia.normalizeWav(path, -1, 42);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** Audio/hum/vocal take → library capture (atomic: files first, then one DB row). */
 export async function saveAudioCapture(tempUri: string, type: Exclude<CaptureType, 'VIDEO'>, meta: CaptureMeta): Promise<Capture> {
   const s = await mediaStore();
   const lib = await getLibrary();
+  await normalizeTake(pathOf(tempUri));
   const probe = await WorldJamMedia.probe(pathOf(tempUri)).catch(() => null);
   const features = await analyze(pathOf(tempUri), type);
   const sha = await WorldJamMedia.sha256(pathOf(tempUri)).catch(() => null);
@@ -170,6 +186,7 @@ export async function saveVideoCapture(videoPath: string, meta: CaptureMeta): Pr
   let audioOk = false;
   if (probe.hasAudio) {
     await WorldJamMedia.decodeToWav(pathOf(videoUri), pathOf(audioTemp), { sampleRate: 48000, mono: true });
+    await normalizeTake(pathOf(audioTemp));
     audioOk = true;
   }
   const frame = await WorldJamMedia.extractFrame(pathOf(videoUri), pathOf(thumbTemp), { maxSize: 640, candidates: 5, quality: 85 }).catch(() => null);

@@ -82,6 +82,16 @@ class WorldJamMediaModule : Module() {
             Wav.peaks(Wav.read(File(path)), buckets).toList()
         }
 
+        AsyncFunction("normalizeWav") { path: String, targetDb: Double, maxGainDb: Double ->
+            val src = File(path)
+            val pcm = Wav.read(src)
+            val gainDb = Wav.normalize(pcm, targetDb, maxGainDb)
+            val tmp = File(src.parentFile, src.name + ".norm")
+            Wav.write16(tmp, pcm)
+            if (!tmp.renameTo(src)) { src.delete(); tmp.renameTo(src) }
+            gainDb
+        }
+
         AsyncFunction("readPcm") { path: String, maxSeconds: Double, sampleRate: Int ->
             var pcm = Wav.resample(Wav.toMono(Wav.read(File(path))), sampleRate)
             val maxFrames = (maxSeconds * sampleRate).toInt()

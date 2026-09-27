@@ -69,6 +69,39 @@ object Wav {
         throw IllegalStateException("WAV has no data chunk")
     }
 
+    /**
+     * Loudness fix for raw (unprocessed) mic takes: removes DC, then scales so
+     * the 99.95th-percentile peak lands on [targetDb] (a lone click cannot hold
+     * the gain down), capped at [maxGainDb]; anything above is soft-clipped.
+     * Returns the applied gain in dB.
+     */
+    fun normalize(pcm: Pcm, targetDb: Double, maxGainDb: Double): Double {
+        val d = pcm.data
+        if (d.isEmpty()) return 0.0
+        var mean = 0.0
+        for (x in d) mean += x
+        mean /= d.size
+        for (i in d.indices) d[i] = (d[i] - mean).toFloat()
+        // Percentile peak from a histogram of |x| (O(n), no sort).
+        val bins = IntArray(4096)
+        for (x in d) bins[min(4095, (abs(x) * 4096f).toInt())]++
+        val keep = (d.size * 0.9995).toLong()
+        var acc = 0L
+        var idx = 4095
+        for (i in bins.indices) { acc += bins[i]; if (acc >= keep) { idx = i; break } }
+        val peak = max(1e-5, (idx + 1) / 4096.0)
+        val target = Math.pow(10.0, targetDb / 20)
+        val gain = min(target / peak, Math.pow(10.0, maxGainDb / 20))
+        val knee = 0.9f
+        for (i in d.indices) {
+            var y = d[i] * gain.toFloat()
+            val a = abs(y)
+            if (a > knee) y = Math.signum(y) * (knee + (1 - knee) * Math.tanh(((a - knee) / (1 - knee)).toDouble()).toFloat())
+            d[i] = y
+        }
+        return 20 * Math.log10(gain)
+    }
+
     /** Writes 16-bit PCM (clamped, rounded). */
     fun write16(file: File, pcm: Pcm) {
         file.parentFile?.mkdirs()

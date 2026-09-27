@@ -14,7 +14,7 @@ import { toast } from '../components/Toasts';
 import { Button, Field, IconButton, Segmented, Sheet } from '../components/ui';
 import type { CaptureType } from '../contracts/library';
 import { useNav } from '../nav/store';
-import { discard, saveAudioCapture, saveVideoCapture, startAudioTake, stopAudioTake, takeLevel } from '../services/capture';
+import { discard, normalizeTake, saveAudioCapture, saveVideoCapture, startAudioTake, stopAudioTake, takeLevel } from '../services/capture';
 import { stop as stopPlayer, toggle, usePlayer } from '../services/player';
 import { addSources } from '../services/studio';
 import { accentGradient, color, font, formatDuration, radius, space } from '../theme';
@@ -40,7 +40,7 @@ interface Pending {
  */
 export function CaptureScreen({ sessionId }: { sessionId?: string }) {
   const insets = useSafeAreaInsets();
-  const { pop } = useNav();
+  const { pop, setTab } = useNav();
   const focused = useIsFocused();
   const [mode, setMode] = useState<Mode>('SOUND');
   const [phase, setPhase] = useState<Phase>('ready');
@@ -55,7 +55,7 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
   const startedAt = useRef(0);
   const suggestion = useRef<string | null>(null);
   const cameraOn = focused && mode !== 'HUM' && phase !== 'review' && phase !== 'saving';
-  const vision = useCaptureTarget(cameraOn && mode === 'SOUND');
+  const vision = useCaptureTarget(cameraOn);
   const preview = usePlayer((s) => (pending && s.activeId === `pending:${pending.uri}` ? s.state : 'idle'));
 
   // Timer + live level while recording; auto-stop at the limit.
@@ -84,7 +84,7 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
 
   const startRecording = async () => {
     stopPlayer();
-    suggestion.current = mode === 'SOUND' ? namingFor(vision.snapshot()).label : null;
+    suggestion.current = mode !== 'HUM' ? namingFor(vision.snapshot()).label : null;
     if (suggestion.current === 'Object') suggestion.current = null;
     try {
       if (mode === 'VIDEO') {
@@ -92,8 +92,8 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
         camera.current.startRecording({
           fileType: 'mp4',
           onRecordingFinished: (v) => {
-            setPending({ kind: 'video', uri: v.path, durationMs: Math.round(v.duration * 1000), suggested: null });
-            enterReview(null, 'Video');
+            setPending({ kind: 'video', uri: v.path, durationMs: Math.round(v.duration * 1000), suggested: suggestion.current });
+            enterReview(suggestion.current, 'Video');
           },
           onRecordingError: (e) => {
             setPhase('ready');
@@ -135,6 +135,9 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
       toast('Too short — hold the button a little longer.', 'error');
       return;
     }
+    setPhase('saving');
+    // Level the take now so the review preview is already at full volume.
+    await normalizeTake(taken.uri.replace(/^file:\/\//, ''));
     setPending({ kind: 'audio', uri: taken.uri, durationMs: Math.round((taken.info.frames / taken.info.sampleRate) * 1000), suggested: suggestion.current });
     enterReview(suggestion.current, mode === 'HUM' ? 'Hum' : 'Sound');
   };
@@ -166,7 +169,7 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
   };
 
   const recording = phase === 'recording';
-  const target = mode === 'SOUND' ? vision.target : null;
+  const target = mode !== 'HUM' ? vision.target : null;
 
   return (
     <View style={styles.root}>
@@ -185,7 +188,19 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
         <View style={styles.topRow}>
           <IconButton icon="close" label="Close capture" onPress={pop} tint={color.text} />
           <Text style={[font.heading, { flex: 1, textAlign: 'center' }]}>{sessionId ? 'Capture for Studio' : 'Capture'}</Text>
-          <View style={{ width: 48 }}>{savedCount > 0 && <Text style={[font.caption, { textAlign: 'center' }]}>{savedCount} saved</Text>}</View>
+          <View style={{ alignItems: 'center' }}>
+            <IconButton
+              icon="jams"
+              label="Go to My Jams"
+              tint={color.text}
+              disabled={recording || phase === 'saving'}
+              onPress={() => {
+                stopPlayer();
+                setTab('jams');
+              }}
+            />
+            {savedCount > 0 && <Text style={font.caption}>{savedCount} saved</Text>}
+          </View>
         </View>
         {!recording && phase === 'ready' && (
           <Segmented<Mode>
@@ -225,7 +240,7 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
             </View>
           </LinearGradient>
         </Pressable>
-        {phase === 'saving' && !pending && <Text style={font.caption}>Finishing video…</Text>}
+        {phase === 'saving' && !pending && <Text style={font.caption}>{mode === 'VIDEO' ? 'Finishing video…' : 'Levelling your sound…'}</Text>}
       </View>
 
       <Sheet visible={phase === 'review' || (phase === 'saving' && !!pending)} onClose={discardPending} title={pending?.kind === 'video' ? 'Name your video' : mode === 'HUM' ? 'Name your hum' : 'Name your sound'}>

@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { Image, StyleSheet, Text, View } from 'react-native';
+import { Image, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { Button, Field, Screen } from '../components/ui';
+import { Button, Field, useKeyboardHeight } from '../components/ui';
 import { toast } from '../components/Toasts';
 import { getLibrary } from '../services/library';
 import { color, font, space } from '../theme';
@@ -16,6 +17,8 @@ export function OnboardingScreen({ onDone }: { onDone: () => void }) {
   const [step, setStep] = useState<'name' | 'welcome'>('name');
   const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
+  const insets = useSafeAreaInsets();
+  const kb = useKeyboardHeight();
 
   const saveName = async () => {
     const clean = name.trim();
@@ -33,9 +36,10 @@ export function OnboardingScreen({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <Screen>
-      <View style={styles.body}>
-        <Image source={LOGO} style={styles.logo} accessibilityIgnoresInvertColors accessibilityLabel="WorldJam" />
+    <View style={[styles.root, { paddingTop: insets.top, paddingBottom: kb > 0 ? kb : insets.bottom }]}>
+      <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        {/* The logo shrinks while typing so the field and button stay above the keyboard. */}
+        <Image source={LOGO} style={kb > 0 ? styles.logoSmall : styles.logo} accessibilityIgnoresInvertColors accessibilityLabel="WorldJam" />
         {step === 'name' ? (
           <>
             <Text style={[font.display, styles.center]}>What's your name?</Text>
@@ -60,7 +64,7 @@ export function OnboardingScreen({ onDone }: { onDone: () => void }) {
             </Text>
           </>
         )}
-      </View>
+      </ScrollView>
       <View style={styles.footer}>
         {step === 'name' ? (
           <Button label="Continue" kind="primary" onPress={saveName} disabled={!name.trim()} busy={saving} />
@@ -68,13 +72,15 @@ export function OnboardingScreen({ onDone }: { onDone: () => void }) {
           <Button label={`Enter WorldJam, ${name.trim()}`} kind="primary" onPress={onDone} />
         )}
       </View>
-    </Screen>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  body: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: space.md },
+  root: { flex: 1, backgroundColor: color.bg, paddingHorizontal: space.lg },
+  body: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', gap: space.md, paddingVertical: space.lg },
   logo: { width: 132, height: 132, marginBottom: space.xl },
+  logoSmall: { width: 64, height: 64, marginBottom: space.sm },
   center: { textAlign: 'center' },
   footer: { paddingBottom: space.xl, paddingTop: space.md, backgroundColor: color.bg },
 });
