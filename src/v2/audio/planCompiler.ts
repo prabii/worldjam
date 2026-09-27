@@ -357,25 +357,41 @@ export async function compilePlan(plan: MusicPlan, inventory: Record<string, Inv
     });
   }
 
-  const usedBuses = [...new Set(layers.map((l) => l.bus))];
+  return assembleGraph({ sources, layers, bpm, durationSec: plan.durationSec, sampleRate, reverb: plan.mix.reverb ?? 0.3, warmth, masterGainDb: plan.mix.masterGainDb ?? 0, productionOnFx: !!opts.production });
+}
+
+/** Buses (KB effect chains), glue compressor and limiter around a set of layers — shared by every compile path. */
+export function assembleGraph(g: {
+  sources: RenderSource[];
+  layers: RenderLayer[];
+  bpm: number;
+  durationSec: number;
+  sampleRate?: number;
+  reverb?: number;
+  warmth?: number;
+  masterGainDb?: number;
+  productionOnFx?: boolean;
+}): RenderGraph {
+  const reverbScale = 0.5 + (g.reverb ?? 0.3);
+  const warmth = g.warmth ?? 0.3;
+  const usedBuses = [...new Set(g.layers.map((l) => l.bus))];
   const buses: RenderBus[] = usedBuses.map((name) => {
-    const effects = BUS_EFFECTS[name].map((e) => toRenderEffect(e, bpm, reverbScale));
+    const effects = BUS_EFFECTS[name].map((e) => toRenderEffect(e, g.bpm, reverbScale));
     // Warmth: gentle saturation where it reads as analogue glue, not distortion.
     if ((name === 'DRUMS' || name === 'BASS') && warmth > 0.2) effects.unshift({ type: 'saturation', drive: 1 + 3 * warmth, mix: 0.3 * warmth });
     // The production pass arrives mixed; it only needs level, not the FX-bus reverb.
-    if (name === 'FX' && opts.production && layers.every((l) => l.bus !== 'FX' || l.id === 'ace_production')) effects.length = 0;
+    if (name === 'FX' && g.productionOnFx && g.layers.every((l) => l.bus !== 'FX' || l.id === 'ace_production')) effects.length = 0;
     return { name, gainDb: BUS_GAIN[name], effects };
   });
-
   return {
     version: RENDER_GRAPH_VERSION,
-    sampleRate,
-    durationSec: +(plan.durationSec + 1.5).toFixed(3),
-    sources,
-    layers,
+    sampleRate: g.sampleRate ?? 48000,
+    durationSec: +(g.durationSec + 1.5).toFixed(3),
+    sources: g.sources,
+    layers: g.layers,
     buses,
     master: {
-      gainDb: plan.mix.masterGainDb ?? 0,
+      gainDb: g.masterGainDb ?? 0,
       glue: { type: 'compressor', thresholdDb: -14, ratio: 2, attackMs: 10, releaseMs: 150, makeupDb: 1.5 },
       limiterCeilingDb: -1,
       fadeOutSec: 2,

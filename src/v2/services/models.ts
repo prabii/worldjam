@@ -11,7 +11,7 @@ import { WorldJamMedia, isMediaModuleAvailable } from '../../../modules/worldjam
  * the same place each runtime already looks. Everything that is not AI works
  * without them.
  */
-export type PackId = 'director' | 'music' | 'producer' | 'texture';
+export type PackId = 'director' | 'music' | 'texture';
 
 interface PackFile {
   name: string;
@@ -60,32 +60,6 @@ export const PACKS: ModelPack[] = [
     ],
   },
   {
-    id: 'producer',
-    title: 'AI producer (optional)',
-    body: 'ACE-Step 1.5 re-produces the mix of your captures in the style you ask for.',
-    dir: 'acestep',
-    files: [
-      {
-        name: 'Qwen3-Embedding-0.6B-Q8_0.gguf',
-        url: `${HF}/Serveurperso/ACE-Step-1.5-GGUF/resolve/main/Qwen3-Embedding-0.6B-Q8_0.gguf`,
-        bytes: 784144960,
-        sha256: '972f23255e46adfe744a0eb9a0039f3c63988f65753b0968d776e8b27168c321',
-      },
-      {
-        name: 'acestep-v15-turbo-Q4_K_M.gguf',
-        url: `${HF}/Serveurperso/ACE-Step-1.5-GGUF/resolve/main/acestep-v15-turbo-Q4_K_M.gguf`,
-        bytes: 1445710272,
-        sha256: '55b4d8514850f3d0f82536f37e99673aaf48df802b5ae5b153eea32a2e2daa5e',
-      },
-      {
-        name: 'vae-BF16.gguf',
-        url: `${HF}/Serveurperso/ACE-Step-1.5-GGUF/resolve/main/vae-BF16.gguf`,
-        bytes: 337420928,
-        sha256: '0599862ac5d15cd308e1d2e368373aea6c02e25ebd1737ad4a4562a0901b0ef8',
-      },
-    ],
-  },
-  {
     id: 'texture',
     title: 'AI texture',
     body: 'Stable Audio Open Small adds a short atmosphere under your sounds.',
@@ -124,7 +98,6 @@ export type PackStatus =
 export const useModels = create<Record<PackId, PackStatus>>(() => ({
   director: { state: 'checking' },
   music: { state: 'checking' },
-  producer: { state: 'checking' },
   texture: { state: 'checking' },
 }));
 
@@ -147,7 +120,7 @@ async function runtimeReady(id: PackId): Promise<boolean> {
     }
   }
   // Native returns null when ready, a reason string otherwise.
-  const check = id === 'producer' ? WorldJamAudio.aceStepUnavailableReason : WorldJamAudio.textureUnavailableReason;
+  const check = WorldJamAudio.textureUnavailableReason;
   if (typeof check !== 'function') return false;
   try {
     return check() == null;

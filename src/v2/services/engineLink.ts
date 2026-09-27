@@ -5,8 +5,10 @@ import { getGemmaRuntime } from '@/ai/gemma';
 import { renderLayer } from '@/audio/synth';
 import { encodeWav, toBase64 } from '@/audio/render';
 import { monoToStereo, renderMelody } from '@/audio/melodySynth';
+import { estimateNoiseFloor, findTransientWindow } from '@/dsp/denoise';
+import type { AccompanimentLayer, Style } from '@/types';
 
-import { WorldJamMedia } from '../../../modules/worldjam-media/src';
+import { WorldJamMedia, pcmFromBase64 } from '../../../modules/worldjam-media/src';
 import type { ScaleId, StyleId, SynthInstrument } from '../contracts/musicPlan';
 import type { RenderGraph, RenderResult } from '../contracts/renderGraph';
 import type { LlmClient } from '../ai/planner';
@@ -32,6 +34,55 @@ const stemCache = new Map<string, { path: string; durationSec: number }>();
  * written once as a WAV and reused for every render of the same settings.
  */
 /** The music model that will run (Stable Audio 3 first, else Open Small) and its longest clip. */
+const hitCache = new Map<string, { startSec: number; endSec: number } | null>();
+
+/** Master's hit isolation: where the capture's main hit and its ringing tail are (null = use the whole file). */
+export async function hitWindow(path: string): Promise<{ startSec: number; endSec: number } | null> {
+  if (hitCache.has(path)) return hitCache.get(path)!;
+  let out: { startSec: number; endSec: number } | null = null;
+  try {
+    const { base64, sampleRate } = await WorldJamMedia.readPcm(path, 30, 48000);
+    const pcm = pcmFromBase64(base64);
+    const w = findTransientWindow(pcm, sampleRate, estimateNoiseFloor(pcm, sampleRate));
+    if (w) out = { startSec: w.start / sampleRate, endSec: w.end / sampleRate };
+  } catch {
+    out = null;
+  }
+  hitCache.set(path, out);
+  return out;
+}
+
+const accCache = new Map<string, { path: string; durationSec: number }>();
+
+/** Master's synth accompaniment for one section (renderLayer with the chord rotation), as a WAV file. */
+export async function renderAccompaniment(layer: AccompanimentLayer, o: { bpm: number; bars: number; key: string | null; style: Style; rotation: number }) {
+  const key = `${layer}|${o.bpm}|${o.bars}|${o.key}|${o.style}|${o.rotation}`;
+  const hit = accCache.get(key);
+  if (hit && (await FileSystem.getInfoAsync(`file://${hit.path}`)).exists) return hit;
+  const sampleRate = 48000;
+  const pcm = renderLayer(layer, { sampleRate, bpm: o.bpm, bars: o.bars, key: o.key, style: o.style, rotation: o.rotation });
+  const wav = encodeWav(Float32Array.from(pcm), sampleRate, 1);
+  const s = await mediaStore();
+  const uri = s.tempUri('wav');
+  await FileSystem.writeAsStringAsync(uri, toBase64(wav), { encoding: FileSystem.EncodingType.Base64 });
+  const out = { path: uri.replace(/^file:\/\//, ''), durationSec: pcm.length / sampleRate };
+  accCache.set(key, out);
+  return out;
+}
+
+/** Stable Audio music for a prompt (SA3 up to 45 s, Open Small up to ~11 s), cached per prompt+seed. */
+export async function renderMusicClip(prompt: string, seconds: number, seed: number): Promise<{ path: string; durationSec: number } | null> {
+  if (typeof WorldJamAudio.generateTextureToFile !== 'function' || WorldJamAudio.textureUnavailableReason?.() != null) return null;
+  const e = musicEngine();
+  const want = Math.max(1, Math.min(e.maxSeconds, seconds));
+  return cached(`clip|${prompt}|${seed}|${want.toFixed(2)}`, async () => {
+    const s = await mediaStore();
+    const path = rawPath(s.tempUri('wav'));
+    const r = await WorldJamAudio.generateTextureToFile!(prompt, want, freshSeed(seed), path);
+    return r.ok ? { path, durationSec: want } : null;
+  });
+}
+
 export function musicEngine(): { name: string; maxSeconds: number; sa3: boolean } {
   try {
     const e = WorldJamAudio.textureEngine?.();

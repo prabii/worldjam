@@ -19,7 +19,9 @@ import { KB_VERSION } from '../ai/kb/rules';
 import { SYSTEM_PROMPT_VERSION } from '../ai/context';
 import { captureAudioPath, getAsset } from './media';
 import { deleteCapture, mediaStore } from './capture';
-import { compileDeps, currentLlm, engineLatencyMs, musicEngine, renderToFile } from './engineLink';
+import { compileDeps, currentLlm, engineLatencyMs, hitWindow, musicEngine, renderAccompaniment, renderMusicClip, renderToFile } from './engineLink';
+import { masterGenerate, type MasterSound } from '../audio/masterEngine';
+import type { ArrangementPlan } from '@/types';
 import { getLibrary, notifyLibraryChanged } from './library';
 import { stop as stopPlayer } from './player';
 
@@ -29,9 +31,9 @@ const DEFAULT_PAD: PadSettings = { gainDb: 0, pan: 0, pitchSemitones: 0, trimSta
 export type Stage = 'ANALYZING' | 'PLANNING' | 'VALIDATING' | 'COMPOSING' | 'RENDERING' | 'PRODUCING' | 'MIXING';
 export const STAGE_LABEL: Record<Stage, string> = {
   ANALYZING: 'Listening to your sounds',
-  PLANNING: 'Arranging',
+  PLANNING: 'Gemma is arranging your beats',
   VALIDATING: 'Checking the arrangement',
-  COMPOSING: 'Composing music with Stable Audio 3',
+  COMPOSING: 'Stable Audio is making the music for your genre',
   RENDERING: 'Rendering',
   PRODUCING: 'Producing with ACE-Step',
   MIXING: 'Mixing and mastering',
@@ -56,6 +58,8 @@ export interface Preview {
   notes: string[];
   produced: boolean;
   prompt: string | null;
+  /** Master's arrangement (Gemma's beats, genre, tempo) — edits hand it back to Gemma. */
+  arrangement?: ArrangementPlan | null;
 }
 
 interface StudioState {
@@ -519,25 +523,95 @@ async function runJob(fn: (token: number) => Promise<void>): Promise<void> {
   }
 }
 
-export function generate(): Promise<void> {
+/** The session's sounds as master's objects: each capture's main hit (findTransientWindow) and its role. */
+async function masterSounds(): Promise<MasterSound[]> {
+  const out: MasterSound[] = [];
+  for (const src of get().session?.sources ?? []) {
+    const c = get().captures[src.captureId];
+    if (!c || src.settings.muted) continue;
+    const path = await captureAudioPath(c);
+    if (!path) continue;
+    const voice = c.type === 'HUM' || c.type === 'VOCAL';
+    out.push({
+      id: c.id,
+      name: c.name,
+      type: c.type,
+      role: (src.role as LayerRole | null) ?? roleForCapture(c),
+      features: c.features,
+      path,
+      durationSec: (c.durationMs || 1000) / 1000,
+      hit: voice ? null : await hitWindow(path),
+    });
+  }
+  return out;
+}
+
+/**
+ * Master's music engine (see audio/masterEngine.ts): Gemma arranges the
+ * beats, the genre's groove and tempo, the song form, section-rotated
+ * accompaniment and Stable Audio music per section — rendered and previewed.
+ */
+function runMaster(opts: { words: string | null; edit?: { instruction: string; previous: ArrangementPlan } | null; notePrefix?: string }): Promise<void> {
   return runJob(async (token) => {
-    const caps = plannerCaptures();
-    if (caps.length === 0) throw new Error('Add at least one sound first.');
-    const out = await generatePlan(
-      { captures: caps, prompt: get().prompt, style: get().style, durationSec: get().durationSec, lock: voiceLock(), lyrics: get().lyrics, onStage: (st) => token === jobToken && set({ job: { stage: st, progress: 0 } }) },
-      currentLlm(),
+    const sounds = await masterSounds();
+    if (sounds.length === 0) throw new Error('Add at least one sound first.');
+    if (!opts.edit) set({ bedSalt: Math.floor(Math.random() * 1_000_000) });
+    const chip = get().style;
+    const useMusic = get().aiMusic;
+    const engine = musicEngine();
+    const live = () => token === jobToken;
+    const r = await masterGenerate(
+      {
+        sounds,
+        words: opts.words,
+        chipGenre: chip ? styleSpec(chip).label : null,
+        chipStyle: chip,
+        fallbackStyle: chip ? styleSpec(chip).feel : 'chill',
+        durationSec: get().durationSec,
+        edit: opts.edit ?? null,
+        nonce: get().bedSalt,
+      },
+      {
+        renderStem: renderAccompaniment,
+        renderBed: useMusic ? renderMusicClip : undefined,
+        sa3: useMusic && engine.sa3,
+        maxSeconds: engine.maxSeconds,
+        onStage: (stage, progress) => {
+          if (!live()) return;
+          set({ job: { stage: stage === 'ARRANGING' ? 'PLANNING' : stage === 'COMPOSING' ? 'COMPOSING' : 'RENDERING', progress } });
+        },
+      },
     );
-    if (token !== jobToken) return;
-    // A fresh seed for every Generate press (master): the same words never hand back a stale take.
-    set({ bedSalt: Math.floor(Math.random() * 1_000_000) });
-    const sa3 = get().aiMusic && musicEngine().sa3;
-    const plan = get().aiTexture && !sa3 ? withTexture(out.plan, get().prompt) : out.plan;
-    const p = await renderPreview(plan, token);
-    if (!p) return;
-    const notes = out.source === 'fallback' ? [`Arranged by the built-in director${out.error ? ` (${out.error})` : ''}`] : out.repairs.length ? [`${out.repairs.length} fix(es) applied`] : [];
-    replacePreview({ ...p, source: out.source, notes });
-    await logPrompt('PLAN', out.plan);
+    if (!live()) return;
+    set({ job: { stage: 'MIXING', progress: 0 } });
+    const store = await mediaStore();
+    const uri = store.tempUri('wav');
+    const out = await renderToFile(r.graph, uri, (p) => live() && set({ job: { stage: 'MIXING', progress: p } }));
+    if (!live()) {
+      void FileSystem.deleteAsync(uri, { idempotent: true });
+      return;
+    }
+    const music = r.prompts.chorus ?? r.prompts.verse ?? Object.values(r.prompts)[0];
+    const notes = [opts.notePrefix ?? null, r.info, music ? `${engine.name || 'Stable Audio'}: “${music}”` : null].filter((x): x is string => !!x);
+    const plan = get().lyrics ? { ...r.plan, lyrics: get().lyrics } : r.plan;
+    replacePreview({
+      plan,
+      uri,
+      peaks: out.peaks,
+      durationMs: Math.round(out.durationSec * 1000),
+      mode: 'AI',
+      source: r.usedGemma ? 'model' : 'fallback',
+      notes,
+      produced: false,
+      prompt: opts.words,
+      arrangement: r.arrangement,
+    });
+    await logPrompt(opts.edit ? 'EDIT' : 'PLAN', plan, opts.edit?.instruction ?? opts.words ?? undefined);
   });
+}
+
+export function generate(): Promise<void> {
+  return runMaster({ words: get().prompt.trim() || null });
 }
 
 /** Renders the session's saved plan again (sessions keep plans, not render files). */
@@ -551,6 +625,10 @@ export function rerender(): Promise<void> {
 }
 
 export function editPreview(instruction: string): Promise<void> {
+  const current = get().preview;
+  if (current?.arrangement) {
+    return runMaster({ words: current.prompt, edit: { instruction, previous: current.arrangement }, notePrefix: `Gemma re-tuned: “${instruction}”` });
+  }
   return runJob(async (token) => {
     const base = get().preview?.plan ?? get().session?.plan;
     if (!base) throw new Error('Generate a track first.');
@@ -566,6 +644,10 @@ export function editPreview(instruction: string): Promise<void> {
 
 /** Manual take → plan → prompt edit → AI preview ("Enhance with AI"). */
 export function enhanceTake(instruction: string): Promise<void> {
+  if (get().take && get().session) {
+    set({ mode: 'AI' });
+    return runMaster({ words: instruction.trim() || get().prompt.trim() || null, notePrefix: 'Your sounds, arranged by Gemma' });
+  }
   return runJob(async (token) => {
     const t = get().take;
     const s = get().session;

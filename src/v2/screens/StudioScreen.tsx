@@ -20,8 +20,8 @@ import { useVoicePrompt } from '../services/speech';
 import { musicEngine } from '../services/engineLink';
 import {
   MAX_PADS, STAGE_LABEL, cancelJob, clearTake, editPreview, enhanceTake, generate, newSession, openSession, pauseTake, playTake,
-  plannerCaptures, previewSuggestion, produce, removeSource, renderTake, rerender, saveTrack, setAiMusic, setAiTexture, setAiTiming, setBpm, setDuration,
-  setMetronome, setMode, setPad, setPadLayout, setProductionAmount, setPrompt, setQuantize, setRole, setStyle, startRecording,
+  plannerCaptures, previewSuggestion, removeSource, renderTake, rerender, saveTrack, setAiMusic, setAiTexture, setAiTiming, setBpm, setDuration,
+  setMetronome, setMode, setPad, setPadLayout, setPrompt, setQuantize, setRole, setStyle, startRecording,
   stopRecording, stopTake, tapTempo, triggerPad, usePadHits, useStudio, useSuggestionAsTake, useSuggestionInAi,
 } from '../services/studio';
 import { color, font, formatDuration, radius, roleColor, space } from '../theme';
@@ -450,7 +450,6 @@ function PreviewPanel() {
   const job = useStudio((s) => s.job);
   const lyrics = useStudio((s) => s.lyrics);
   const lyricId = useStudio((s) => s.lyricId);
-  const amount = useStudio((s) => s.productionAmount);
   const session = useStudio((s) => s.session);
   const { push, setTab } = useNav();
   const id = preview ? `preview:${preview.uri}` : '';
@@ -472,7 +471,7 @@ function PreviewPanel() {
       <Text style={font.heading}>{preview.plan.title || 'Your track'}</Text>
       <Text style={font.caption}>
         {preview.plan.style} · {preview.plan.tempoBpm} BPM · {preview.plan.key} {preview.plan.scale} · {formatDuration(preview.durationMs)} · {preview.source}
-        {preview.produced ? ' · ACE-Step produced' : ''}
+        
       </Text>
       <View style={styles.playerRow}>
         <Pressable onPress={() => void toggle(id, preview.uri)} style={styles.playBig} accessibilityRole="button" accessibilityLabel={state === 'playing' ? 'Pause' : state === 'paused' ? 'Resume' : 'Play'}>
@@ -494,15 +493,6 @@ function PreviewPanel() {
       <View style={styles.row}>
         <Button label="Apply" icon="edit" disabled={!edit.trim() || !!job} onPress={() => { void editPreview(edit.trim()); setEdit(''); }} style={{ flex: 1 }} />
         <Button label="Regenerate" icon="repeat" disabled={!!job} onPress={() => void (preview.mode === 'AI' ? generate() : rerender())} style={{ flex: 1 }} />
-      </View>
-      <View style={{ gap: space.sm }}>
-        <Text style={font.label}>AI producer (ACE-Step 1.5) · blend {Math.round(amount * 100)}%</Text>
-        <View style={styles.wrap}>
-          {[0.3, 0.45, 0.6, 0.8].map((v) => (
-            <Chip key={v} label={`${Math.round(v * 100)}%`} selected={Math.abs(amount - v) < 0.01} onPress={() => setProductionAmount(v)} />
-          ))}
-        </View>
-        <Button label={preview.produced ? 'Produced — regenerate to produce again' : 'Produce with ACE-Step'} icon="ai" disabled={!!job || preview.produced} onPress={() => void produce()} />
       </View>
       <View style={styles.row}>
         <Button label={lyrics ? 'Edit lyrics' : 'Lyrics'} icon="lyrics" onPress={() => push({ name: 'lyricsEditor', id: lyricId ?? undefined, captureIds: session?.sources.map((s) => s.captureId) ?? [] })} style={{ flex: 1 }} />
