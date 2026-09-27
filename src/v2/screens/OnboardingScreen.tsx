@@ -36,7 +36,7 @@ export function OnboardingScreen({ onDone }: { onDone: () => void }) {
   };
 
   return (
-    <View style={[styles.root, { paddingTop: insets.top, paddingBottom: kb > 0 ? kb : insets.bottom }]}>
+    <View style={[styles.root, { paddingTop: insets.top, paddingBottom: kb > 0 ? kb + insets.bottom : insets.bottom }]}>
       <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
         {/* The logo shrinks while typing so the field and button stay above the keyboard. */}
         <Image source={LOGO} style={kb > 0 ? styles.logoSmall : styles.logo} accessibilityIgnoresInvertColors accessibilityLabel="WorldJam" />

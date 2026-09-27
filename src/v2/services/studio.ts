@@ -83,6 +83,8 @@ interface StudioState {
   lyricId: string | null;
   /** AI mode timing (same controls as Manual); grid 0 = the style's own feel. */
   aiTiming: QuantizeSettings;
+  /** Add a Stable Audio Open Small atmosphere layer (your words + the genre's instruments). */
+  aiTexture: boolean;
 }
 
 export const useStudio = create<StudioState>(() => ({
@@ -107,6 +109,7 @@ export const useStudio = create<StudioState>(() => ({
   lyrics: null,
   lyricId: null,
   aiTiming: { grid: 0, strength: 0.85, swing: 0 },
+  aiTexture: false,
 }));
 
 /** Last hit time per pad (ms) — the soundboard flashes a pad when it sounds, live or from a take. */
@@ -489,7 +492,8 @@ export function generate(): Promise<void> {
       currentLlm(),
     );
     if (token !== jobToken) return;
-    const p = await renderPreview(out.plan, token);
+    const plan = get().aiTexture ? withTexture(out.plan, get().prompt) : out.plan;
+    const p = await renderPreview(plan, token);
     if (!p) return;
     const notes = out.source === 'fallback' ? [`Arranged by the built-in director${out.error ? ` (${out.error})` : ''}`] : out.repairs.length ? [`${out.repairs.length} fix(es) applied`] : [];
     replacePreview({ ...p, source: out.source, notes });
@@ -711,6 +715,26 @@ export function setProductionAmount(amount: number): void {
 export function setLyrics(lyrics: PlanLyrics | null, lyricId: string | null = null): void {
   set({ lyrics, lyricId: lyrics ? lyricId : null });
 }
+export function setAiTexture(on: boolean): void {
+  set({ aiTexture: on });
+}
+
+/** Adds an AI texture bed under the fuller sections (skipped when the plan already has one). */
+function withTexture(plan: MusicPlan, userPrompt: string): MusicPlan {
+  if (plan.layers.some((l) => l.source.kind === 'texture')) return plan;
+  const spec = styleSpec(plan.style);
+  const prompt = [userPrompt.trim() || null, spec.instruments, plan.mood ?? null, spec.drumLed ? null : 'no drums', `${plan.tempoBpm} bpm`, `${plan.key} ${plan.scale}`]
+    .filter(Boolean)
+    .join(', ')
+    .slice(0, 160);
+  const id = 'ai_texture';
+  return {
+    ...plan,
+    layers: [...plan.layers, { id, source: { kind: 'texture', prompt }, role: 'texture', gainDb: -11, pan: 0 }],
+    sections: plan.sections.map((sec) => (sec.energy >= 0.5 ? { ...sec, layers: [...sec.layers, id] } : sec)),
+  };
+}
+
 export function setAiTiming(t: Partial<QuantizeSettings>): void {
   set({ aiTiming: { ...get().aiTiming, ...t } });
 }

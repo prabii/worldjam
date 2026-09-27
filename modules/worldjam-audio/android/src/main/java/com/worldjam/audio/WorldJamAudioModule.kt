@@ -142,6 +142,22 @@ class WorldJamAudioModule : Module() {
             }.apply { name = "worldjam-texture" }.start()
         }
 
+        AsyncFunction("generateTextureToFile") { prompt: String, seconds: Double, seed: Int, outPath: String, promise: Promise ->
+            val gen = textureGen()
+            if (gen == null) {
+                promise.resolve(mapOf("ok" to false, "error" to "no app context"))
+                return@AsyncFunction
+            }
+            Thread {
+                try {
+                    val r = gen.generate(prompt, seconds, seed, nativeSampleRate(), 6, java.io.File(outPath))
+                    promise.resolve(mapOf("ok" to java.io.File(outPath).isFile, "elapsedMs" to r.elapsedMs.toDouble(), "frames" to r.pcm.size, "log" to r.log))
+                } catch (e: Throwable) {
+                    promise.resolve(mapOf("ok" to false, "error" to (e.message ?: e.toString())))
+                }
+            }.apply { name = "worldjam-texture-file" }.start()
+        }
+
         // --- V2: pitched/looping pads, file-based samples and takes --------
 
         Function("triggerPitched") { slot: Int, gain: Float, pan: Float, rate: Float, loop: Boolean ->

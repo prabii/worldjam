@@ -55,6 +55,8 @@ export interface WorldJamAudioNative {
    * `slot` as a mono sample, trimmed and faded to loop. ~18 s on an iQOO 15.
    */
   generateTexture?(prompt: string, seconds: number, seed: number, slot: number): Promise<TextureResult>;
+  /** V2: generates the texture into a WAV file (for the offline mixer) instead of a pad slot. */
+  generateTextureToFile?(prompt: string, seconds: number, seed: number, outPath: string): Promise<TextureResult>;
 
   // --- V2: pitched/looping pads, file-based samples and takes -------------
 

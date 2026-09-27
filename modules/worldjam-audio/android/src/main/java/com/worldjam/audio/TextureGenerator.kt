@@ -54,7 +54,7 @@ class TextureGenerator(private val context: Context) {
      * PCM at [targetRate], trimmed to exactly [seconds] with short fades so it
      * loops without a click. Blocking: call from a background thread.
      */
-    fun generate(prompt: String, seconds: Double, seed: Int, targetRate: Int, threads: Int): Result {
+    fun generate(prompt: String, seconds: Double, seed: Int, targetRate: Int, threads: Int, keepWavAt: File? = null): Result {
         unavailableReason()?.let { throw IllegalStateException(it) }
 
         val out = File(context.cacheDir, "texture-${System.currentTimeMillis()}.wav")
@@ -105,7 +105,13 @@ class TextureGenerator(private val context: Context) {
             fade(trimmed, targetRate)
             return Result(trimmed, elapsedMs, log.takeLast(600))
         } finally {
-            out.delete()
+            // V2 mixes the clip offline: keep the generator's own WAV when asked.
+            if (keepWavAt != null) {
+                keepWavAt.parentFile?.mkdirs()
+                if (!out.renameTo(keepWavAt)) { out.copyTo(keepWavAt, overwrite = true); out.delete() }
+            } else {
+                out.delete()
+            }
         }
     }
 

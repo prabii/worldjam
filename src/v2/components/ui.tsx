@@ -279,7 +279,7 @@ export function Sheet({
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose} statusBarTranslucent>
       <View style={{ flex: 1 }}>
         <Pressable style={styles.scrim} onPress={onClose} accessibilityLabel="Close" />
-        <View style={[styles.sheet, { paddingBottom: (kb > 0 ? kb : insets.bottom) + space.xl, maxHeight: '92%' }]}>
+        <View style={[styles.sheet, { paddingBottom: (kb > 0 ? kb + insets.bottom : insets.bottom) + space.xl, maxHeight: '92%' }]}>
           <View style={styles.grabber} />
           {title ? (
             <Text style={[font.heading, { marginBottom: space.lg }]} accessibilityRole="header">

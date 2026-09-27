@@ -19,7 +19,7 @@ import { stop as stopPlayer, toggle, usePlayer } from '../services/player';
 import { useVoicePrompt } from '../services/speech';
 import {
   MAX_PADS, STAGE_LABEL, cancelJob, clearTake, editPreview, enhanceTake, generate, newSession, openSession, pauseTake, playTake,
-  plannerCaptures, previewSuggestion, produce, removeSource, renderTake, rerender, saveTrack, setAiTiming, setBpm, setDuration,
+  plannerCaptures, previewSuggestion, produce, removeSource, renderTake, rerender, saveTrack, setAiTexture, setAiTiming, setBpm, setDuration,
   setMetronome, setMode, setPad, setPadLayout, setProductionAmount, setPrompt, setQuantize, setRole, setStyle, startRecording,
   stopRecording, stopTake, tapTempo, triggerPad, usePadHits, useStudio, useSuggestionAsTake, useSuggestionInAi,
 } from '../services/studio';
@@ -90,7 +90,7 @@ function SoundBoard({ session, onAdd }: { session: StudioSession; onAdd: () => v
   const [editing, setEditing] = useState<number | null>(null);
   const layout = session.padLayout ?? 'auto';
   const n = session.sources.length;
-  const cols = layout === '8x8' ? 8 : layout === '4x4' ? 4 : n <= 4 ? 2 : n <= 9 ? 3 : 4;
+  const cols = layout === '8x8' ? 8 : layout === '4x4' ? 4 : n <= 8 ? 3 : 4;
   const perPage = layout === '8x8' ? 64 : layout === '4x4' ? 16 : Math.max(n + 1, cols * Math.ceil((n + 1) / cols));
   const pages = Math.max(1, Math.ceil(Math.min(MAX_PADS, Math.max(n + 1, perPage)) / perPage));
   const width = Math.min(Dimensions.get('window').width, 480) - space.lg * 2;
@@ -107,8 +107,9 @@ function SoundBoard({ session, onAdd }: { session: StudioSession; onAdd: () => v
 
   return (
     <View style={{ gap: space.sm }}>
+      <Text style={font.label}>Soundboard · tap to play, hold to edit</Text>
       <View style={styles.rowBetween}>
-        <Text style={font.label}>Soundboard · tap to play, hold to edit</Text>
+        <Text style={font.caption}>Layout</Text>
         <View style={styles.row}>
           {(['auto', '4x4', '8x8'] as const).map((l) => (
             <Chip key={l} label={l === 'auto' ? 'Auto' : l === '4x4' ? '4×4' : '8×8'} selected={layout === l} onPress={() => { setPadLayout(l); setPage(0); }} />
@@ -342,6 +343,7 @@ function AiPanel() {
   const job = useStudio((s) => s.job);
   const error = useStudio((s) => s.error);
   const aiTiming = useStudio((s) => s.aiTiming);
+  const aiTexture = useStudio((s) => s.aiTexture);
   const voice = useVoicePrompt((t) => setPrompt(t));
 
   return (
@@ -373,6 +375,7 @@ function AiPanel() {
         onChange={(v) => setDuration(Number(v))}
       />
       <TimingControls value={aiTiming} onChange={setAiTiming} styleFeel />
+      <Chip label={aiTexture ? 'AI texture on (Stable Audio, +~20 s)' : 'AI texture off'} selected={aiTexture} onPress={() => setAiTexture(!aiTexture)} />
       <Button label="Generate track" kind="primary" icon="ai" disabled={!!job} onPress={() => void generate()} />
       <JobBar />
       {error && !job ? <Text style={[font.label, { color: color.error }]}>{error}</Text> : null}
@@ -449,7 +452,7 @@ function PreviewPanel() {
       <View style={{ gap: space.sm }}>
         <Text style={font.label}>AI producer (ACE-Step 1.5) · blend {Math.round(amount * 100)}%</Text>
         <View style={styles.wrap}>
-          {[0.3, 0.5, 0.7, 0.9].map((v) => (
+          {[0.3, 0.45, 0.6, 0.8].map((v) => (
             <Chip key={v} label={`${Math.round(v * 100)}%`} selected={Math.abs(amount - v) < 0.01} onPress={() => setProductionAmount(v)} />
           ))}
         </View>
@@ -570,8 +573,8 @@ function AiGuide({ enabled, bottomInset }: { enabled: boolean; bottomInset: numb
               <Text style={font.caption}>{s.style} · {s.tempoBpm} BPM</Text>
               <Text style={font.body}>{s.description}</Text>
               <View style={styles.row}>
-                <Button label="Preview" icon="play" onPress={() => previewSuggestion(s)} style={{ flex: 1 }} />
-                <Button label="Manual" icon="pads" onPress={() => { useSuggestionAsTake(s); setOpen(false); toast('Loaded as a take — press play'); }} style={{ flex: 1 }} />
+                <Button label="Play" icon="play" onPress={() => previewSuggestion(s)} style={{ flex: 1 }} />
+                <Button label="Pads" icon="pads" onPress={() => { useSuggestionAsTake(s); setOpen(false); toast('Loaded as a take — press play'); }} style={{ flex: 1 }} />
                 <Button label="AI" icon="ai" onPress={() => { useSuggestionInAi(s); setOpen(false); toast('Prompt ready — tap Generate'); }} style={{ flex: 1 }} />
               </View>
             </View>

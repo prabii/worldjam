@@ -46,6 +46,16 @@ export const compileDeps: CompileDeps = {
     stemCache.set(key, out);
     return out;
   },
+  /** Stable Audio Open Small atmosphere for a plan's texture layer; null (layer skipped) when unavailable. */
+  async renderTexture(prompt: string, seconds: number) {
+    if (typeof WorldJamAudio.generateTextureToFile !== 'function' || WorldJamAudio.textureUnavailableReason?.() != null) return null;
+    const s = await mediaStore();
+    const uri = s.tempUri('wav');
+    const path = uri.replace(/^file:\/\//, '');
+    // Fresh seed each render so the same words never hand back a stale clip.
+    const r = await WorldJamAudio.generateTextureToFile(prompt, Math.min(10, seconds), Math.floor(Math.random() * 2_147_483_647), path);
+    return r.ok ? { path, durationSec: Math.min(10, seconds) } : null;
+  },
 };
 
 /** Runs the native offline renderer. */

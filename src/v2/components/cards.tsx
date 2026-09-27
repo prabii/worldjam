@@ -11,7 +11,9 @@ import { Icon } from './Icon';
 const ARTWORK = require('../../../assets/branding/adaptive-foreground.png');
 
 /** Compact bar envelope; bars before `progress` are lit. */
-export function Peaks({ peaks, progress = 0, height = 28, tint = color.textSecondary }: { peaks: number[]; progress?: number; height?: number; tint?: string }) {
+export function Peaks({ peaks: raw, progress = 0, height = 28, tint = color.textSecondary }: { peaks: number[]; progress?: number; height?: number; tint?: string }) {
+  // Renders keep 200 buckets; more bars than fit (with their gaps) collapse to nothing.
+  const peaks = downsample(raw, 56);
   if (peaks.length === 0) return <View style={{ height }} />;
   const lit = Math.round(progress * peaks.length);
   return (
