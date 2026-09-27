@@ -149,7 +149,7 @@ export function lyricsToPlanHints(lyrics: PlanLyrics, style: StyleId | null): Ly
   const tempo = Math.round(Math.min(spec.tempo.max, Math.max(spec.tempo.min, spec.tempo.home * (8 / Math.max(4, syllables)) ** 0.35)));
   const kinds: SectionKind[] = ['intro', ...lyrics.sections.map((s): SectionKind => (s.type === 'chorus' || s.type === 'hook' ? 'chorus' : s.type === 'bridge' ? 'bridge' : 'verse')), 'outro'];
   const bars = 2 + lines.length + 2;
-  const durationSec = Math.min(90, Math.max(30, Math.round((bars * 240) / tempo)));
+  const durationSec = Math.min(90, Math.max(10, Math.round((bars * 240) / tempo)));
   return { tempoBpm: tempo, sections: kinds, durationSec, syllablesPerLine: +syllables.toFixed(1) };
 }
 

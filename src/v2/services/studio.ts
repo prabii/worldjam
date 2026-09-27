@@ -710,7 +710,7 @@ export function setStyle(style: StyleId | null): void {
   set({ style });
 }
 export function setDuration(durationSec: number): void {
-  set({ durationSec });
+  set({ durationSec: Math.round(Math.min(90, Math.max(10, durationSec))) });
 }
 export function setProductionAmount(amount: number): void {
   set({ productionAmount: amount });

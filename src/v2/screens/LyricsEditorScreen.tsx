@@ -110,7 +110,7 @@ export function LyricsEditorScreen({ id, trackId, captureIds }: { id?: string; t
       const hints = lyricsToPlanHints(l, useStudio.getState().style);
       setLyrics(l, lid);
       setBpm(hints.tempoBpm);
-      setDuration(hints.durationSec <= 30 ? 30 : hints.durationSec <= 45 ? 45 : hints.durationSec <= 60 ? 60 : 90);
+      setDuration(hints.durationSec);
       setPrompt(`A song for these lyrics: ${l.title}${theme ? ` — ${theme}` : ''}`);
       setMode('AI');
       toast('Lyrics loaded in Studio — tap Generate', 'success');

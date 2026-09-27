@@ -62,7 +62,7 @@ export function buildPlanPrompt(input: PlanPromptInput): string {
     RENDERER,
     kbSnippet(input.style),
     `SOUNDS:\n${inventory(input.captures)}`,
-    `Target length about ${Math.round(input.durationSec)} seconds (at least 30).`,
+    `The song must last ${Math.round(input.durationSec)} seconds (bars x 4 beats at your tempo; within 3 seconds).`,
     locked.length ? `LOCKED: ${locked.join('; ')}.` : '',
     input.intent.featured.length ? `FEATURE these sound ids prominently: ${input.intent.featured.join(', ')}.` : '',
     input.intent.excluded.length ? `Do NOT use: ${input.intent.excluded.join(', ')}.` : '',

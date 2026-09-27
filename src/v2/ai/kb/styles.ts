@@ -338,12 +338,18 @@ export function styleSpec(id: StyleId | null | undefined): StyleSpec {
 
 /** Bars for a target length at a tempo (4/4), at least 4. */
 export function barsFor(durationSec: number, bpm: number): number {
-  return Math.max(4, Math.round((durationSec * bpm) / 240));
+  return Math.max(1, Math.round((durationSec * bpm) / 240));
 }
 
 /** Splits a song of `totalBars` into the style's sections (whole bars, at least 1 each). */
 export function formFor(style: StyleSpec, totalBars: number): Array<{ kind: SectionKind; bars: number; energy: number }> {
-  const raw = style.form.map((f) => ({ ...f, bars: Math.max(1, Math.round(f.share * totalBars)) }));
+  // Very short songs keep only as many sections as they have bars, the most energetic first (in song order).
+  let form = style.form;
+  if (totalBars < form.length) {
+    const keep = new Set([...form.map((f, i) => ({ f, i }))].sort((a, b) => b.f.energy - a.f.energy).slice(0, Math.max(1, totalBars)).map((x) => x.i));
+    form = form.filter((_, i) => keep.has(i));
+  }
+  const raw = form.map((f) => ({ ...f, bars: Math.max(1, Math.round(f.share * totalBars)) }));
   let diff = totalBars - raw.reduce((n, s) => n + s.bars, 0);
   // Put rounding slack into (or take it from) the most energetic section.
   const main = raw.reduce((best, s, i) => (s.energy > raw[best].energy ? i : best), 0);

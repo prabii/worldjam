@@ -370,16 +370,54 @@ function AiPanel() {
           <Chip key={s.id} label={s.label} selected={style === s.id} onPress={() => setStyle(s.id)} />
         ))}
       </View>
-      <Segmented
-        options={[{ value: '30', label: '30 s' }, { value: '45', label: '45 s' }, { value: '60', label: '60 s' }, { value: '90', label: 'Song 90 s' }]}
-        value={String(durationSec) as '30' | '45' | '60' | '90'}
-        onChange={(v) => setDuration(Number(v))}
-      />
+      <LengthPicker value={durationSec} onChange={setDuration} />
       <TimingControls value={aiTiming} onChange={setAiTiming} styleFeel />
       <Chip label={aiTexture ? 'AI texture on (Stable Audio, +~20 s)' : 'AI texture off'} selected={aiTexture} onPress={() => setAiTexture(!aiTexture)} />
       <Button label="Generate track" kind="primary" icon="ai" disabled={!!job} onPress={() => void generate()} />
       <JobBar />
       {error && !job ? <Text style={[font.label, { color: color.error }]}>{error}</Text> : null}
+    </View>
+  );
+}
+
+const LENGTHS = [10, 20, 30, 45, 60];
+
+/** Song length: quick presets or any whole number of seconds (10-90); the arrangement lands within ~2 s of it. */
+function LengthPicker({ value, onChange }: { value: number; onChange: (s: number) => void }) {
+  const [text, setText] = useState(LENGTHS.includes(value) ? '' : String(value));
+  const commit = () => {
+    const n = Math.round(Number(text));
+    if (!text.trim()) return;
+    if (!Number.isFinite(n) || n < 10 || n > 90) {
+      toast('Length must be 10 to 90 seconds', 'error');
+      setText(LENGTHS.includes(value) ? '' : String(value));
+      return;
+    }
+    onChange(n);
+  };
+  return (
+    <View style={{ gap: space.sm }}>
+      <Text style={font.label}>Length · {value} s</Text>
+      <View style={styles.wrap}>
+        {LENGTHS.map((s) => (
+          <Chip key={s} label={`${s} s`} selected={value === s} onPress={() => { setText(''); onChange(s); }} />
+        ))}
+        <View style={[styles.lenBox, !LENGTHS.includes(value) && styles.lenBoxOn]}>
+          <TextInput
+            value={text}
+            onChangeText={(t) => setText(t.replace(/[^0-9]/g, '').slice(0, 2))}
+            onEndEditing={commit}
+            onSubmitEditing={commit}
+            keyboardType="number-pad"
+            returnKeyType="done"
+            placeholder="Custom"
+            placeholderTextColor={color.textMuted}
+            style={styles.lenInput}
+            accessibilityLabel="Custom length in seconds, 10 to 90"
+          />
+          <Text style={font.caption}>s</Text>
+        </View>
+      </View>
     </View>
   );
 }
@@ -603,6 +641,9 @@ const styles = StyleSheet.create({
   emptyBox: { marginTop: space.sm, padding: space.lg, gap: space.sm, borderRadius: radius.panel, backgroundColor: color.surface },
   promptBox: { flexDirection: 'row', alignItems: 'flex-start', gap: space.sm, padding: space.md, borderRadius: radius.panel, backgroundColor: color.surface, borderWidth: 1, borderColor: color.line },
   promptInput: { flex: 1, minHeight: 72, color: color.text, fontSize: 16, textAlignVertical: 'top' },
+  lenBox: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 40, paddingHorizontal: space.md, borderRadius: radius.round, borderWidth: 1, borderColor: color.line },
+  lenBoxOn: { borderColor: color.violet },
+  lenInput: { minWidth: 56, color: color.text, fontSize: 14, paddingVertical: 0, textAlign: 'center' },
   job: { flexDirection: 'row', alignItems: 'center', gap: space.md, padding: space.md, borderRadius: radius.card, backgroundColor: color.surface },
   bar: { height: 6, borderRadius: 3, backgroundColor: color.line, overflow: 'hidden' },
   barFill: { height: 6, backgroundColor: color.cyan },

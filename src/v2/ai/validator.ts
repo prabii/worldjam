@@ -33,7 +33,7 @@ export interface CaptureRef {
 
 export interface ValidateContext {
   captures: CaptureRef[];
-  /** Target length; the plan is extended/trimmed toward it (>= 30 s). */
+  /** Target length (10-90 s); the plan is fitted to it within about one bar (<= ~2 s). */
   durationSec: number;
   style?: StyleId | null;
   /** The user chose the genre (chip or named in the prompt): the model may not change it. */
@@ -276,7 +276,8 @@ export function validatePlan(input: unknown, ctx: ValidateContext): ValidationRe
     const lids = (Array.isArray(s.layers) ? s.layers : []).filter((x): x is string => typeof x === 'string' && layerIds.has(x));
     sections.push({ id: `${kind}${sections.length + 1}`, kind, bars, energy: clamp(isNum(s.energy) ? unit(s.energy) : 0.6, 0, 1), layers: lids });
   }
-  const targetBars = barsFor(Math.max(PLAN_LIMITS.durationMin, ctx.durationSec), tempo);
+  const target = clamp(isNum(ctx.durationSec) ? ctx.durationSec : 30, PLAN_LIMITS.durationMin, PLAN_LIMITS.durationMax);
+  const targetBars = barsFor(target, tempo);
   if (sections.length === 0) {
     repairs.push('sections missing, using the style form');
     sections = formFor(spec, targetBars).map((f, i) => ({ id: `${f.kind}${i + 1}`, kind: f.kind, bars: f.bars, energy: f.energy, layers: [...layerIds] }));
@@ -289,25 +290,32 @@ export function validatePlan(input: unknown, ctx: ValidateContext): ValidationRe
     }
   }
 
-  // 6. Duration: at least 30 s (and the requested length), at most the limit.
+  // 6. Duration: fitted to the requested length (10-90 s) to the nearest bar.
   const secPerBar = 240 / tempo;
-  const minBars = Math.ceil(Math.max(PLAN_LIMITS.durationMin, Math.min(ctx.durationSec, PLAN_LIMITS.durationMax)) / secPerBar);
   let totalBars = sections.reduce((n, s) => n + s.bars, 0);
-  if (totalBars < minBars) {
+  if (totalBars < targetBars) {
     const main = sections.reduce((best, s) => (s.energy > best.energy ? s : best), sections[0]);
-    while (totalBars < minBars) {
-      const extra = Math.min(main.bars, minBars - totalBars, 8);
+    while (totalBars < targetBars) {
+      const extra = Math.min(Math.max(1, main.bars), targetBars - totalBars, 8);
       const insertAt = sections.indexOf(main) + 1;
       sections.splice(insertAt, 0, { ...main, id: `${main.kind}${sections.length + 1}`, bars: extra, layers: [...main.layers] });
       totalBars += extra;
     }
     repairs.push(`extended to ${Math.round(totalBars * secPerBar)} s`);
   }
-  const maxBars = Math.floor(PLAN_LIMITS.durationMax / secPerBar);
-  while (totalBars > maxBars && sections.length > 1) {
-    const s = sections.pop()!;
-    totalBars -= s.bars;
-    repairs.push('trimmed to the length limit');
+  if (totalBars > targetBars) {
+    // Shorten the longest sections a bar at a time; if every section is one bar, drop the quietest.
+    while (totalBars > targetBars) {
+      const longest = sections.reduce((best, s) => (s.bars > best.bars ? s : best), sections[0]);
+      if (longest.bars > 1) {
+        longest.bars -= 1;
+      } else if (sections.length > 1) {
+        const quiet = sections.reduce((low, s) => (s.energy < low.energy ? s : low), sections[0]);
+        sections.splice(sections.indexOf(quiet), 1);
+      } else break;
+      totalBars = sections.reduce((n, s) => n + s.bars, 0);
+    }
+    repairs.push(`fitted to ${Math.round(totalBars * secPerBar)} s`);
   }
   let t = 0;
   for (const s of sections) {

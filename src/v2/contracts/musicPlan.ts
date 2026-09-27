@@ -196,7 +196,7 @@ export interface PlanPatch {
 export const PLAN_LIMITS = {
   tempoMin: 60,
   tempoMax: 180,
-  durationMin: 30,
+  durationMin: 10,
   durationMax: 90,
   gainMin: -30,
   gainMax: 6,

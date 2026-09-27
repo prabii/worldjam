@@ -167,3 +167,15 @@ describe('tempo edits', () => {
     expect(Math.abs(lenSec(out.plan) - lenSec(plan))).toBeLessThan(6);
   });
 });
+
+describe('song length', () => {
+  it('fits every requested length (10-60 s) within 3 s, for slow and fast genres', () => {
+    for (const style of ['indian_classical', 'pop', 'bhangra', 'phonk'] as const) {
+      for (const target of [10, 20, 30, 45, 60, 37]) {
+        const plan = fallbackPlan({ captures: caps, intent: interpretPrompt('', []), style, durationSec: target });
+        expect(Math.abs(plan.durationSec - target)).toBeLessThanOrEqual(3);
+        expect(plan.sections.length).toBeGreaterThan(0);
+      }
+    }
+  });
+});

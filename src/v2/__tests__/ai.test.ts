@@ -130,13 +130,13 @@ describe('validator', () => {
 });
 
 describe('fallback planner + patches', () => {
-  it('always produces a valid ≥30 s plan for every style and 1..5 sounds', () => {
+  it('always produces a valid plan within 3 s of the requested length for every style and 1..5 sounds', () => {
     for (const style of STYLE_IDS) {
       for (let n = 1; n <= caps.length; n++) {
         const plan = fallbackPlan({ captures: caps.slice(0, n), intent: interpretPrompt('', []), style, durationSec: 30 });
         const v = validatePlan(plan, { captures: captureRefs(caps.slice(0, n)), durationSec: 30 });
         expect(v.errors).toEqual([]);
-        expect(plan.durationSec).toBeGreaterThanOrEqual(30);
+        expect(Math.abs(plan.durationSec - 30)).toBeLessThanOrEqual(3);
         expect(plan.layers.length).toBeGreaterThan(0);
       }
     }
@@ -240,7 +240,7 @@ describe('lyrics', () => {
     const sparse = lyricsToPlanHints(textToLyrics('hey\nyeah\noh'), 'pop');
     expect(dense.tempoBpm).toBeLessThan(sparse.tempoBpm);
     expect(dense.sections[0]).toBe('intro');
-    expect(dense.durationSec).toBeGreaterThanOrEqual(30);
+    expect(dense.durationSec).toBeGreaterThanOrEqual(10);
   });
 
   it('generates with the model or falls back, and never rewrites without being asked', async () => {

@@ -135,7 +135,7 @@ export function performanceToPlan(
       pitch: src.settings.pitchSemitones ? { mode: 'fixed', semitones: src.settings.pitchSemitones } : undefined,
     });
   }
-  const durationSec = Math.max(30, opts.durationSec ?? 30);
+  const durationSec = Math.max(10, opts.durationSec ?? 30);
   const totalBars = Math.max(4, Math.round((durationSec * opts.bpm) / 240));
   const sections = formFor(spec, totalBars).map((f, i) => ({ id: `${f.kind}${i + 1}`, kind: f.kind, bars: f.bars, energy: f.energy, layers: layers.map((l) => l.id) }));
   return {
