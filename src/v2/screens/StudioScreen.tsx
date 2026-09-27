@@ -25,6 +25,7 @@ import {
 } from '../services/studio';
 import { color, font, formatDuration, radius, roleColor, space } from '../theme';
 
+const secs = (ms: number) => `${(ms / 1000).toFixed(2)} s`;
 const ROLES: LayerRole[] = ['kick', 'snare', 'hat', 'percussion', 'bass', 'chords', 'pad', 'lead', 'vocal', 'texture', 'fx'];
 
 export function StudioScreen({ bottomInset }: { bottomInset: number }) {
@@ -206,14 +207,14 @@ function PadSheet({ src, onClose }: { src: StudioSource | null; onClose: () => v
             <Stepper label="Pitch" value={`${st.pitchSemitones > 0 ? '+' : ''}${st.pitchSemitones} st`} onMinus={() => void setPad(src.padIndex, { pitchSemitones: Math.max(-12, st.pitchSemitones - 1) })} onPlus={() => void setPad(src.padIndex, { pitchSemitones: Math.min(12, st.pitchSemitones + 1) })} />
             {dur > 0 && (
               <View style={{ gap: space.sm }}>
-                <Text style={font.label}>Trim · {formatDuration(st.trimStartMs)} – {formatDuration(trimEnd)}</Text>
+                <Text style={font.label}>Trim · {secs(st.trimStartMs)} – {secs(trimEnd)} of {secs(dur)}</Text>
                 <View style={styles.trimBox}>
                   <Peaks peaks={peaks} height={36} />
                   <View pointerEvents="none" style={[styles.trimShade, { left: 0, width: `${(st.trimStartMs / dur) * 100}%` }]} />
                   <View pointerEvents="none" style={[styles.trimShade, { right: 0, width: `${((dur - trimEnd) / dur) * 100}%` }]} />
                 </View>
-                <Stepper label="Start" value={formatDuration(st.trimStartMs)} onMinus={() => void setPad(src.padIndex, { trimStartMs: Math.max(0, st.trimStartMs - step) })} onPlus={() => void setPad(src.padIndex, { trimStartMs: Math.min(trimEnd - 50, st.trimStartMs + step) })} />
-                <Stepper label="End" value={formatDuration(trimEnd)} onMinus={() => void setPad(src.padIndex, { trimEndMs: Math.max(st.trimStartMs + 50, trimEnd - step) })} onPlus={() => void setPad(src.padIndex, { trimEndMs: Math.min(dur, trimEnd + step) >= dur ? null : trimEnd + step })} />
+                <Stepper label="Start" value={secs(st.trimStartMs)} onMinus={() => void setPad(src.padIndex, { trimStartMs: Math.max(0, st.trimStartMs - step) })} onPlus={() => void setPad(src.padIndex, { trimStartMs: Math.min(trimEnd - 50, st.trimStartMs + step) })} />
+                <Stepper label="End" value={secs(trimEnd)} onMinus={() => void setPad(src.padIndex, { trimEndMs: Math.max(st.trimStartMs + 50, trimEnd - step) })} onPlus={() => void setPad(src.padIndex, { trimEndMs: Math.min(dur, trimEnd + step) >= dur ? null : trimEnd + step })} />
               </View>
             )}
             <View style={styles.wrap}>

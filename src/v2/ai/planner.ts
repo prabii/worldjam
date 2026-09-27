@@ -58,6 +58,7 @@ function ctxFor(req: PlanRequest, style: StyleId, intent: ReturnType<typeof inte
     captures: captureRefs(req.captures),
     durationSec: intent.durationSec ?? req.durationSec,
     style,
+    lockStyle: !!(req.style ?? intent.style),
     lock: req.lock,
     featured: intent.featured,
     excluded: intent.excluded,
@@ -72,7 +73,8 @@ function ctxFor(req: PlanRequest, style: StyleId, intent: ReturnType<typeof inte
 export async function generatePlan(req: PlanRequest, llm: LlmClient | null): Promise<PlanOutcome> {
   req.onStage?.('ANALYZING');
   const intent = interpretPrompt(req.prompt, req.captures);
-  const style: StyleId = intent.style ?? req.style ?? 'chill';
+  // The genre chip is an explicit choice and wins over words in the prompt.
+  const style: StyleId = req.style ?? intent.style ?? 'chill';
   const ctx = ctxFor(req, style, intent);
   const versions = { model: llm?.model ?? null, kb: KB_VERSION, systemPrompt: SYSTEM_PROMPT_VERSION };
   const started = Date.now();
@@ -93,7 +95,7 @@ export async function generatePlan(req: PlanRequest, llm: LlmClient | null): Pro
   req.onStage?.('PLANNING');
   let raw: string;
   try {
-    raw = await withTimeout(llm.complete(prompt, { jsonSchema: schema, maxTokens: 700, temperature: 0.4 }), PLAN_TIMEOUT_MS);
+    raw = await withTimeout(llm.complete(prompt, { jsonSchema: schema, maxTokens: 1200, temperature: 0.4 }), PLAN_TIMEOUT_MS);
   } catch (err) {
     return fallback(err instanceof Error ? err.message : String(err));
   }
@@ -110,7 +112,7 @@ export async function generatePlan(req: PlanRequest, llm: LlmClient | null): Pro
     const retry = await withTimeout(
       llm.complete(`${prompt}\n\nYour previous answer had problems: ${complaint}. Use only the listed sound ids. Reply with corrected JSON.`, {
         jsonSchema: schema,
-        maxTokens: 700,
+        maxTokens: 1200,
         temperature: 0.2,
       }),
       PLAN_TIMEOUT_MS,

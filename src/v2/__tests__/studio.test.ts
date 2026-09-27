@@ -142,3 +142,15 @@ describe('karaoke timing', () => {
     expect(lines[lines.length - 1].startMs).toBeLessThan(40000);
   });
 });
+
+describe('genre lock', () => {
+  it('keeps the genre the user chose even when the model answers another', async () => {
+    const { generatePlan } = await import('../ai/planner');
+    const reply = JSON.stringify({ title: 'X', style: 'lofi', tempoBpm: 140, key: 'C#', scale: 'minor', durationSec: 30, sections: [{ kind: 'verse', bars: 16, energy: 0.8, layers: ['a'] }], layers: [{ id: 'a', source: 'c1', role: 'kick', gainDb: 0, pattern: 'X...X...X...X...' }] });
+    const llm = { model: 'fake', complete: async () => reply };
+    const out = await generatePlan({ captures: caps, prompt: 'something dark', style: 'phonk', durationSec: 30 }, llm);
+    expect(out.plan.style).toBe('phonk');
+    const byWords = await generatePlan({ captures: caps, prompt: 'a bhangra party', style: null, durationSec: 30 }, llm);
+    expect(byWords.plan.style).toBe('bhangra');
+  });
+});

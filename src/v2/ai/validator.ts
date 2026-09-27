@@ -36,6 +36,8 @@ export interface ValidateContext {
   /** Target length; the plan is extended/trimmed toward it (>= 30 s). */
   durationSec: number;
   style?: StyleId | null;
+  /** The user chose the genre (chip or named in the prompt): the model may not change it. */
+  lockStyle?: boolean;
   /** Fixed by the user's hum/grid: the model may not change these. */
   lock?: { tempoBpm?: number | null; key?: NoteName | null; scale?: ScaleId | null };
   /** Capture ids the prompt asked to feature — they must be prominent. */
@@ -182,7 +184,7 @@ export function validatePlan(input: unknown, ctx: ValidateContext): ValidationRe
   if (!raw) return { plan: null, repairs, errors: ['response was not a JSON object'] };
 
   // 2. Schema basics: style, tempo, key.
-  let style: StyleId = STYLE_IDS.includes(raw.style as StyleId) ? (raw.style as StyleId) : ctx.style ?? 'chill';
+  let style: StyleId = ctx.lockStyle && ctx.style ? ctx.style : STYLE_IDS.includes(raw.style as StyleId) ? (raw.style as StyleId) : ctx.style ?? 'chill';
   if (raw.style !== style) repairs.push(`style ${String(raw.style)} → ${style}`);
   const spec = styleSpec(style);
 
