@@ -13,7 +13,7 @@ Never invent sound ids. Respect explicit user instructions. Preserve user-writte
 The user's hums/singing are the vocal: never pitch-shift them and never write parts for an AI singer.
 Return one JSON object only.`;
 
-const RENDERER = `Renderer can do: trigger/loop sounds, per-hit gain, pan -1..1, pitch a TONAL sound as bass/chords/melody, lowpass/highpass/eq, delay, reverb, saturation, compression, section energy. Patterns are one bar of 16 sixteenth steps: X accent, x hit, - hold, . rest.`;
+const RENDERER = `Renderer can do: trigger/loop sounds, per-hit gain, pan -100..100 (percent), pitch a TONAL sound as bass/chords/melody, lowpass/highpass/eq, delay, reverb, saturation, compression, section energy. Patterns are one bar of 16 sixteenth steps: X accent, x hit, - hold, . rest.`;
 
 function inventory(captures: PlannerCapture[]): string {
   return captures
@@ -68,7 +68,7 @@ export function buildPlanPrompt(input: PlanPromptInput): string {
     input.intent.excluded.length ? `Do NOT use: ${input.intent.excluded.join(', ')}.` : '',
     lyricHint,
     `USER PROMPT: "${input.prompt.trim() || `a ${styleSpec(input.style).label} track`}"`,
-    'Reply with the plan JSON: title, style, mood, tempoBpm, key, scale, sections [{kind, bars, energy, layers:[layer ids]}], layers [{id, source (a sound id or synth:bass etc.), role, gainDb, pan, pattern, pitch}], mix {reverb, warmth}, caption (genre + instruments for a producer, no vocals).',
+    'Reply with the plan JSON: title, style, mood, tempoBpm, key, scale, sections [{kind, bars, energy 0-100, layers:[layer ids]}], layers [{id, source (a sound id or synth:bass etc.), role, gainDb, pan -100..100, pattern, pitch}], mix {reverb 0-100, warmth 0-100}. All numbers are whole numbers, caption (genre + instruments for a producer, no vocals).',
   ]
     .filter(Boolean)
     .join('\n\n');
@@ -130,7 +130,7 @@ export function planSchema(sourceIds: string[]): object {
           properties: {
             kind: { type: 'string', enum: KIND_ENUM },
             bars: { type: 'integer', minimum: 1, maximum: 16 },
-            energy: { type: 'number', minimum: 0, maximum: 1 },
+            energy: { type: 'integer', minimum: 0, maximum: 100 },
             layers: { type: 'array', maxItems: 10, items: { type: 'string', maxLength: 24 } },
           },
           required: ['kind', 'bars', 'energy', 'layers'],
@@ -146,15 +146,15 @@ export function planSchema(sourceIds: string[]): object {
             id: { type: 'string', maxLength: 24 },
             source: { type: 'string', enum: [...sourceIds, 'synth:bass', 'synth:chords', 'synth:pad', 'synth:arp', 'synth:guitar'] },
             role: { type: 'string', enum: ROLE_ENUM },
-            gainDb: { type: 'number', minimum: -24, maximum: 6 },
-            pan: { type: 'number', minimum: -1, maximum: 1 },
+            gainDb: { type: 'integer', minimum: -24, maximum: 6 },
+            pan: { type: 'integer', minimum: -100, maximum: 100 },
             pattern: { type: 'string', maxLength: 16 },
             pitch: { type: 'string', enum: ['fixed', 'bass', 'chords', 'melody'] },
           },
           required: ['id', 'source', 'role', 'gainDb'],
         },
       },
-      mix: { type: 'object', properties: { reverb: { type: 'number', minimum: 0, maximum: 1 }, warmth: { type: 'number', minimum: 0, maximum: 1 } } },
+      mix: { type: 'object', properties: { reverb: { type: 'integer', minimum: 0, maximum: 100 }, warmth: { type: 'integer', minimum: 0, maximum: 100 } } },
       caption: { type: 'string', maxLength: 160 },
     },
     required: ['title', 'style', 'tempoBpm', 'key', 'scale', 'sections', 'layers', 'caption'],
@@ -175,26 +175,26 @@ export function patchSchema(layerIds: string[], sectionIds: string[]): object {
             type: { type: 'string', enum: ['remove_layer', 'set_gain', 'set_pan', 'set_role', 'set_pattern', 'add_effect', 'change_tempo', 'change_section_energy', 'change_style'] },
             layerId: { type: 'string', enum: layerIds.length ? layerIds : ['none'] },
             sectionId: { type: 'string', enum: sectionIds.length ? sectionIds : ['none'] },
-            gainDb: { type: 'number', minimum: -24, maximum: 6 },
-            pan: { type: 'number', minimum: -1, maximum: 1 },
+            gainDb: { type: 'integer', minimum: -24, maximum: 6 },
+            pan: { type: 'integer', minimum: -100, maximum: 100 },
             role: { type: 'string', enum: ROLE_ENUM },
             pattern: { type: 'string', maxLength: 16 },
             tempoBpm: { type: 'integer', minimum: 60, maximum: 180 },
-            energy: { type: 'number', minimum: 0, maximum: 1 },
+            energy: { type: 'integer', minimum: 0, maximum: 100 },
             style: { type: 'string', enum: [...STYLE_IDS] },
             effect: {
               type: 'object',
               properties: {
                 type: { type: 'string', enum: ['lowpass', 'highpass', 'eq', 'delay', 'reverb', 'saturation', 'compressor'] },
-                cutoffHz: { type: 'number' },
-                freqHz: { type: 'number' },
-                gainDb: { type: 'number' },
-                beats: { type: 'number' },
-                feedback: { type: 'number' },
-                mix: { type: 'number' },
-                size: { type: 'number' },
-                drive: { type: 'number' },
-                amount: { type: 'number' },
+                cutoffHz: { type: 'integer', minimum: 40, maximum: 18000 },
+                freqHz: { type: 'integer', minimum: 40, maximum: 16000 },
+                gainDb: { type: 'integer', minimum: -12, maximum: 12 },
+                beats: { type: 'number', enum: [0.25, 0.5, 0.75, 1, 1.5, 2] },
+                feedback: { type: 'integer', minimum: 0, maximum: 85 },
+                mix: { type: 'integer', minimum: 0, maximum: 80 },
+                size: { type: 'integer', minimum: 0, maximum: 100 },
+                drive: { type: 'integer', minimum: 1, maximum: 8 },
+                amount: { type: 'integer', minimum: 0, maximum: 100 },
               },
               required: ['type'],
             },

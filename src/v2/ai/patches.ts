@@ -2,7 +2,7 @@ import type { LayerRole, MusicPlan, PatchOp, PlanPatch } from '../contracts/musi
 import { PLAN_LIMITS } from '../contracts/musicPlan';
 import { ROLE_BUS } from './kb/rules';
 import { styleSpec } from './kb/styles';
-import { normalizePattern, validatePlan, type ValidateContext } from './validator';
+import { normalizePattern, unit, validatePlan, type ValidateContext } from './validator';
 
 export interface PatchResult {
   plan: MusicPlan;
@@ -58,7 +58,7 @@ export function applyPatch(plan: MusicPlan, patch: PlanPatch, ctx: ValidateConte
           break;
         }
         if (op.type === 'set_gain') l.gainDb = op.gainDb;
-        if (op.type === 'set_pan') l.pan = op.pan;
+        if (op.type === 'set_pan') l.pan = Math.max(-1, Math.min(1, unit(op.pan)));
         if (op.type === 'set_role') {
           l.role = op.role as LayerRole;
           l.bus = ROLE_BUS[l.role];
@@ -86,7 +86,7 @@ export function applyPatch(plan: MusicPlan, patch: PlanPatch, ctx: ValidateConte
           rejected.push(label);
           break;
         }
-        s.energy = op.energy;
+        s.energy = Math.max(0, Math.min(1, unit(op.energy)));
         applied.push(label);
         break;
       }

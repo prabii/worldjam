@@ -64,6 +64,9 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
 const obj = (v: unknown): Record<string, unknown> | null => (typeof v === 'object' && v !== null && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
 
+/** Model numbers are whole percents (grammar-safe: no endless decimals); plans keep 0..1 / -1..1. */
+export const unit = (v: number): number => (Math.abs(v) > 1 ? v / 100 : v);
+
 export function normalizeKey(raw: unknown): { key: NoteName | null; scale: ScaleId | null } {
   if (typeof raw !== 'string') return { key: null, scale: null };
   const m = raw.trim().match(/^([A-Ga-g])([#b♯♭]?)\s*(m(?!aj)|min(or)?|maj(or)?)?/);
@@ -105,13 +108,13 @@ function normalizeEffect(raw: unknown): PlanEffect | null {
     case 'eq':
       return isNum(e.freqHz) && isNum(e.gainDb) ? { type: 'eq', freqHz: clamp(e.freqHz, 40, 16000), gainDb: clamp(e.gainDb, -12, 12), q: isNum(e.q) ? clamp(e.q, 0.3, 8) : undefined } : null;
     case 'delay':
-      return { type: 'delay', beats: clamp(isNum(e.beats) ? e.beats : 0.75, 0.125, 4), feedback: clamp(isNum(e.feedback) ? e.feedback : 0.3, 0, 0.85), mix: clamp(isNum(e.mix) ? e.mix : 0.2, 0, 0.8) };
+      return { type: 'delay', beats: clamp(isNum(e.beats) ? e.beats : 0.75, 0.125, 4), feedback: clamp(isNum(e.feedback) ? unit(e.feedback) : 0.3, 0, 0.85), mix: clamp(isNum(e.mix) ? unit(e.mix) : 0.2, 0, 0.8) };
     case 'reverb':
-      return { type: 'reverb', size: clamp(isNum(e.size) ? e.size : 0.5, 0, 1), mix: clamp(isNum(e.mix) ? e.mix : 0.25, 0, 0.8) };
+      return { type: 'reverb', size: clamp(isNum(e.size) ? unit(e.size) : 0.5, 0, 1), mix: clamp(isNum(e.mix) ? unit(e.mix) : 0.25, 0, 0.8) };
     case 'saturation':
-      return { type: 'saturation', drive: clamp(isNum(e.drive) ? e.drive : 2, 1, 8), mix: isNum(e.mix) ? clamp(e.mix, 0, 1) : undefined };
+      return { type: 'saturation', drive: clamp(isNum(e.drive) ? e.drive : 2, 1, 8), mix: isNum(e.mix) ? clamp(unit(e.mix), 0, 1) : undefined };
     case 'compressor':
-      return { type: 'compressor', amount: clamp(isNum(e.amount) ? e.amount : 0.5, 0, 1) };
+      return { type: 'compressor', amount: clamp(isNum(e.amount) ? unit(e.amount) : 0.5, 0, 1) };
     default:
       return null;
   }
@@ -165,7 +168,7 @@ function normalizeEvents(raw: unknown, durationSec: number): PlanEvent[] | undef
       durationSec: isNum(e.durationSec) ? clamp(e.durationSec, 0.01, 30) : undefined,
       pitchSemitones: isNum(e.pitchSemitones) ? clamp(Math.round(e.pitchSemitones), -24, 24) : undefined,
       gainDb: isNum(e.gainDb) ? clamp(e.gainDb, PLAN_LIMITS.gainMin, PLAN_LIMITS.gainMax) : undefined,
-      pan: isNum(e.pan) ? clamp(e.pan, -1, 1) : undefined,
+      pan: isNum(e.pan) ? clamp(unit(e.pan), -1, 1) : undefined,
     });
   }
   return out.length ? out.sort((a, b) => a.timeSec - b.timeSec) : undefined;
@@ -242,7 +245,7 @@ export function validatePlan(input: unknown, ctx: ValidateContext): ValidationRe
       role,
       bus: ROLE_BUS[role],
       gainDb: clamp(isNum(l.gainDb) ? l.gainDb : role === 'texture' ? -8 : -4, PLAN_LIMITS.gainMin, PLAN_LIMITS.gainMax),
-      pan: clamp(isNum(l.pan) ? l.pan : 0, -1, 1),
+      pan: clamp(isNum(l.pan) ? unit(l.pan) : 0, -1, 1),
       pattern,
       pitch: normalizePitch(l.pitch, role, source, ctx),
       effects: (Array.isArray(l.effects) ? l.effects : []).map(normalizeEffect).filter((e): e is PlanEffect => !!e).slice(0, 4),
@@ -271,7 +274,7 @@ export function validatePlan(input: unknown, ctx: ValidateContext): ValidationRe
     const kind: SectionKind = KINDS.includes(s.kind as SectionKind) ? (s.kind as SectionKind) : KINDS.includes(s.id as SectionKind) ? (s.id as SectionKind) : 'verse';
     const bars = clamp(isNum(s.bars) ? Math.round(s.bars) : isNum(s.startSec) && isNum(s.endSec) ? Math.round(((s.endSec - s.startSec) * tempo) / 240) : 4, 1, 32);
     const lids = (Array.isArray(s.layers) ? s.layers : []).filter((x): x is string => typeof x === 'string' && layerIds.has(x));
-    sections.push({ id: `${kind}${sections.length + 1}`, kind, bars, energy: clamp(isNum(s.energy) ? s.energy : 0.6, 0, 1), layers: lids });
+    sections.push({ id: `${kind}${sections.length + 1}`, kind, bars, energy: clamp(isNum(s.energy) ? unit(s.energy) : 0.6, 0, 1), layers: lids });
   }
   const targetBars = barsFor(Math.max(PLAN_LIMITS.durationMin, ctx.durationSec), tempo);
   if (sections.length === 0) {
@@ -336,9 +339,9 @@ export function validatePlan(input: unknown, ctx: ValidateContext): ValidationRe
   // 9. Mix, lyrics, caption.
   const m = obj(raw.mix) ?? {};
   const mix = {
-    reverb: clamp(isNum(m.reverb) ? m.reverb : spec.mix.reverb, 0, 1),
-    width: clamp(isNum(m.width) ? m.width : spec.mix.width, 0, 1),
-    warmth: clamp(isNum(m.warmth) ? m.warmth : spec.mix.warmth, 0, 1),
+    reverb: clamp(isNum(m.reverb) ? unit(m.reverb) : spec.mix.reverb, 0, 1),
+    width: clamp(isNum(m.width) ? unit(m.width) : spec.mix.width, 0, 1),
+    warmth: clamp(isNum(m.warmth) ? unit(m.warmth) : spec.mix.warmth, 0, 1),
     masterGainDb: clamp(isNum(m.masterGainDb) ? m.masterGainDb : 0, -12, 6),
   };
   const lyrics = normalizeLyrics(raw.lyrics);
