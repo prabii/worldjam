@@ -22,6 +22,8 @@ import { CaptureDetailScreen } from './screens/CaptureDetailScreen';
 import { TrackDetailScreen } from './screens/TrackDetailScreen';
 import { LyricsEditorScreen } from './screens/LyricsEditorScreen';
 import { SourcePickerScreen } from './screens/SourcePickerScreen';
+import { TilesScreen } from './screens/TilesScreen';
+import { EchoScreen } from './screens/EchoScreen';
 import { resumePendingWork } from './services/maintenance';
 
 type Boot = 'loading' | 'onboarding' | 'ready';
@@ -109,6 +111,8 @@ export function V2App() {
                   <LyricsEditorScreen id={top.id} trackId={top.trackId} captureIds={top.captureIds} />
                 )}
                 {top.name === 'sourcePicker' && <SourcePickerScreen sessionId={top.sessionId} />}
+                {top.name === 'tiles' && <TilesScreen />}
+                {top.name === 'echo' && <EchoScreen />}
               </View>
             )}
             {!fullScreen && !top && (

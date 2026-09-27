@@ -4,6 +4,7 @@ import type { SqlLibrary } from '../data/repos';
 import { mediaStore, normalizeTake } from './capture';
 import { captureAudioPath } from './media';
 import { refreshModelStatus } from './models';
+import { installStarterLibrary } from './starter';
 
 /**
  * Startup housekeeping (08_QA: "no AI failure corrupts the library"): jobs a
@@ -17,6 +18,11 @@ export async function resumePendingWork(lib: SqlLibrary): Promise<void> {
     await store.cleanup();
     await refreshModelStatus();
     await normalizeOldCaptures(lib);
+  } catch {
+    // Housekeeping must never block the app from opening.
+  }
+  try {
+    await installStarterLibrary(lib);
   } catch {
     // Housekeeping must never block the app from opening.
   }

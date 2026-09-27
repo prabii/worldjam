@@ -1,16 +1,19 @@
 import React, { useEffect, useState } from 'react';
-import { StyleSheet, Text, View } from 'react-native';
+import { Pressable, StyleSheet, Text, View } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 
 import { describeStatus, getModelStatus, subscribeModelStatus } from '@/ai/modelLoader';
 
 import { Button, Field, Screen, SectionTitle } from '../components/ui';
 import { toast } from '../components/Toasts';
+import { Icon } from '../components/Icon';
+import { useNav } from '../nav/store';
 import { getLibrary, notifyLibraryChanged, useLibraryQuery } from '../services/library';
 import { PACKS, downloadPack, packSizeGb, pauseDownload, refreshModelStatus, useModels, type ModelPack } from '../services/models';
 import { color, font, radius, space } from '../theme';
 
 export function SettingsScreen({ bottomInset }: { bottomInset: number }) {
+  const { push } = useNav();
   const { data: profile } = useLibraryQuery((lib) => lib.profile.get(), []);
   const [name, setName] = useState('');
   const [free, setFree] = useState<number | null>(null);
@@ -37,7 +40,7 @@ export function SettingsScreen({ bottomInset }: { bottomInset: number }) {
   return (
     <Screen scroll bottomInset={bottomInset}>
       <Text style={font.title} accessibilityRole="header">
-        Settings
+        Profile
       </Text>
 
       <SectionTitle title="You" />
@@ -45,6 +48,11 @@ export function SettingsScreen({ bottomInset }: { bottomInset: number }) {
         <Field label="Name" value={name} onChangeText={setName} style={{ flex: 1 }} maxLength={40} />
       </View>
       <Button label="Save name" onPress={saveName} disabled={!name.trim() || name.trim() === profile?.name} style={{ marginTop: space.md }} />
+
+      <SectionTitle title="Games" />
+      <Text style={[font.body, { marginBottom: space.md }]}>Play with the sounds you recorded — the better you know your kit, the faster you play in Studio.</Text>
+      <GameCard title="Tiles" body="Tiles fall down three lanes in time with your beat. Tap each lane as its tile lands." onPress={() => push({ name: 'tiles' })} />
+      <GameCard title="Echo" body="A memory game: hear a pattern of your sounds, tap it back. One hit longer every round." onPress={() => push({ name: 'echo' })} />
 
       <SectionTitle title="On-device AI" />
       <Text style={[font.body, { marginBottom: space.md }]}>
@@ -111,7 +119,20 @@ function PackRow({ pack }: { pack: ModelPack }) {
   );
 }
 
+function GameCard({ title, body, onPress }: { title: string; body: string; onPress: () => void }) {
+  return (
+    <Pressable onPress={onPress} style={({ pressed }) => [styles.game, pressed && { opacity: 0.7 }]} accessibilityRole="button" accessibilityLabel={`Play ${title}`}>
+      <View style={{ flex: 1, gap: 4 }}>
+        <Text style={font.heading}>{title}</Text>
+        <Text style={font.label}>{body}</Text>
+      </View>
+      <Icon name="play" size={22} color={color.cyan} />
+    </Pressable>
+  );
+}
+
 const styles = StyleSheet.create({
+  game: { flexDirection: 'row', alignItems: 'center', gap: space.md, padding: space.lg, marginBottom: space.md, borderRadius: radius.panel, backgroundColor: color.surface, borderWidth: 1, borderColor: color.line },
   row: { flexDirection: 'row', gap: space.md, alignItems: 'flex-end' },
   pack: {
     flexDirection: 'row',

@@ -14,7 +14,9 @@ export type Route =
   | { name: 'captureDetail'; id: string }
   | { name: 'trackDetail'; id: string }
   | { name: 'lyricsEditor'; id?: string; trackId?: string; captureIds?: string[] }
-  | { name: 'sourcePicker'; sessionId: string };
+  | { name: 'sourcePicker'; sessionId: string }
+  | { name: 'tiles' }
+  | { name: 'echo' };
 
 interface NavState {
   tab: Tab;

@@ -13,7 +13,7 @@ const TABS: Array<{ tab: Tab; label: string; icon: IconName }> = [
   { tab: 'home', label: 'Home', icon: 'home' },
   { tab: 'jams', label: 'My Jams', icon: 'jams' },
   { tab: 'studio', label: 'Studio', icon: 'studio' },
-  { tab: 'settings', label: 'Settings', icon: 'settings' },
+  { tab: 'settings', label: 'Profile', icon: 'settings' },
 ];
 
 /**
