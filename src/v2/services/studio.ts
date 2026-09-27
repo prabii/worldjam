@@ -578,7 +578,10 @@ export function produce(): Promise<void> {
   return runJob(async (token) => {
     const preview = get().preview;
     if (!preview) throw new Error('Generate a track first.');
-    const reason = WorldJamAudio.aceStepUnavailableReason?.() ?? 'not in this build';
+    // Native returns null when ready, else the reason; a build without the function cannot produce.
+    const reason = typeof WorldJamAudio.aceStepUnavailableReason === 'function' && typeof WorldJamAudio.aceStepGenerate === 'function'
+      ? WorldJamAudio.aceStepUnavailableReason()
+      : 'not in this build';
     if (reason) throw new Error(`AI producer unavailable: ${reason}`);
     const plan = preview.plan;
     set({ job: { stage: 'RENDERING', progress: 0 } });
