@@ -12,6 +12,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { ObjectIcon } from '@/components/ObjectIcon';
 import { Waveform } from '@/components/Waveform';
+import { SampleGallery } from '@/components/SampleGallery';
 import { gradients } from '@/theme/gradients';
 import { useSession } from '@/state/sessionStore';
 import { colors, radius, spacing, type } from '@/theme';
@@ -143,6 +144,9 @@ export function HomeScreen({ onScan, onCompose, onJams, onOpenSession }: Props) 
             </View>
           </View>
         </Pressable>
+
+        {/* --- what the on-device music model can make --- */}
+        <SampleGallery />
 
         {/* --- your sounds, when there are any --- */}
         {objects.length > 0 && (

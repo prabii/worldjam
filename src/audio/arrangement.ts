@@ -32,9 +32,9 @@ export interface Section {
  * disappearing, which is what makes a verse sound like the same song as the
  * chorus rather than a different one.
  */
-type RoleDensity = Record<MusicalRole, number>;
+export type RoleDensity = Record<MusicalRole, number>;
 
-const SECTION_DENSITY: Record<SectionKind, RoleDensity> = {
+export const SECTION_DENSITY: Record<SectionKind, RoleDensity> = {
   intro: { kick: 0.5, snare: 0, hat: 0.5, perc: 0.3, bass: 0, lead: 0.4, texture: 1 },
   verse: { kick: 1, snare: 0.5, hat: 0.8, perc: 0.6, bass: 1, lead: 1, texture: 0.8 },
   build: { kick: 1, snare: 0.8, hat: 1, perc: 1, bass: 1, lead: 1, texture: 0.6 },
@@ -144,7 +144,7 @@ export function velocityFor(beat: number): number {
 }
 
 /** Loudness multiplier per section, so the arc is audible as well as textural. */
-const SECTION_GAIN: Record<SectionKind, number> = {
+export const SECTION_GAIN: Record<SectionKind, number> = {
   intro: 0.7,
   verse: 0.85,
   build: 0.95,

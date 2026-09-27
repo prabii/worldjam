@@ -1,3 +1,4 @@
+import { textureEngine } from '@/audio/engine';
 import React, { useEffect, useState } from 'react';
 import {
   Pressable,
@@ -230,7 +231,10 @@ export function ProfileScreen({ onBack }: Props) {
           <View style={styles.divider} />
           <SettingRow label="AI model" sub="Gemma 4 E2B (on-device)" />
           <View style={styles.divider} />
-          <SettingRow label="Texture engine" sub="Stable Audio Open Small" />
+          <SettingRow
+            label="Music engine"
+            sub={textureEngine().name || 'Stable Audio'}
+          />
         </View>
 
         {/* About */}

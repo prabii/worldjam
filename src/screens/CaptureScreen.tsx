@@ -265,7 +265,7 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
       <View style={styles.spacer} />
 
       {/* --- recording panel (mockup panel 2) --- */}
-      <View style={[styles.recordPanel, { paddingBottom: insets.bottom + spacing.lg }]}>
+      <View style={[styles.recordPanel, { paddingBottom: insets.bottom + spacing.xs }]}>
         {isRecording ? (
           <>
             <LiveWaveform />
@@ -283,8 +283,8 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
             <View style={styles.capturedRow}>
               <Waveform
                 pcm={pcmBySlot.get(lastObject.slot) ?? null}
-                width={180}
-                height={32}
+                width={150}
+                height={22}
                 color={lastObject.color}
                 bars={44}
               />
@@ -292,9 +292,6 @@ export function CaptureScreen({ onDone }: { onDone: () => void }) {
                 <View style={styles.playSmallIcon} />
               </View>
             </View>
-            <Text style={styles.capturedSub}>
-              Real sound from your {lastObject.label.toLowerCase()}
-            </Text>
           </Pressable>
         ) : (
           <Text style={styles.recordHint}>
@@ -542,8 +539,10 @@ const styles = StyleSheet.create({
 
   recordPanel: {
     alignItems: 'center',
-    gap: spacing.sm,
-    paddingTop: spacing.lg,
+    // Compact: the camera is what the player is aiming, so the panel takes
+    // as little of the screen as the controls need.
+    gap: 4,
+    paddingTop: spacing.sm,
     paddingHorizontal: spacing.lg,
     backgroundColor: 'rgba(8,9,12,0.88)',
     borderTopLeftRadius: radius.xl,
@@ -565,7 +564,8 @@ const styles = StyleSheet.create({
 
   capturedCard: {
     width: '100%',
-    padding: spacing.md,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.md,
     borderRadius: radius.md,
     borderWidth: 1,
     borderColor: colors.border,
@@ -596,9 +596,9 @@ const styles = StyleSheet.create({
   },
 
   recordButton: {
-    width: 76,
-    height: 76,
-    borderRadius: 38,
+    width: 60,
+    height: 60,
+    borderRadius: 30,
     borderWidth: 3,
     borderColor: colors.text,
     alignItems: 'center',
@@ -606,8 +606,8 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   recordButtonActive: { borderColor: colors.accent },
-  recordInner: { width: 58, height: 58, borderRadius: 29, backgroundColor: colors.accent },
-  recordInnerActive: { width: 28, height: 28, borderRadius: 6 },
+  recordInner: { width: 46, height: 46, borderRadius: 23, backgroundColor: colors.accent },
+  recordInnerActive: { width: 22, height: 22, borderRadius: 5 },
   recordLabel: { ...type.label, color: colors.text },
   status: { ...type.caption, color: colors.live, textAlign: 'center' },
 

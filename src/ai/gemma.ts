@@ -127,11 +127,13 @@ RULES:
 - bpm must suit the style: chill 84-100, jazz 104-136, lofi 70-88, cinematic 62-84, edm 120-130, rock 100-128. If a melody tempo is given, stay within 4 BPM of it.
 - bars is 8 (a full intro, verse, build and chorus).
 - Hats and shakers can play every eighth or sixteenth; long ringing objects should play at most once or twice per bar.
-- texture: a short description (under 12 words) of ONE background sound that makes this track feel finished, like "dusty vinyl chord pad, warm" or "slow dark string swell". Never drums: the objects are the drums.
+- genre: user's genre in their words, else requested_style. user_instruction wins.
+- texture: <12 words of backing music with the genre's instruments.
+- style: nearest of chill/jazz/lofi/cinematic/edm/rock.
 - voiceRole is "lead" when the user sang a tune, "harmony" when the voice should sit under other parts, "texture" for wordless atmosphere, "none" when there is no voice.
 
 Reply with ONLY this JSON, no prose:
-{"bpm":92,"bars":8,"objectPattern":[{"object":"cup","beats":[1,3]},{"object":"table","beats":[2,4]}],"voiceRole":"lead","accompaniment":["bass","chords"],"texture":"warm mellow chord pad","style":"${snapshot.style}"}`;
+{"bpm":92,"bars":8,"objectPattern":[{"object":"cup","beats":[1,3]},{"object":"table","beats":[2,4]}],"voiceRole":"lead","accompaniment":["bass","chords"],"genre":"<genre>","texture":"<backing music for that genre>","style":"${snapshot.style}"}`;
 }
 
 export interface PlanResult {
@@ -195,7 +197,7 @@ export async function generatePlan(
        * asks for a `reasoning` sentence — which cost real seconds to generate
        * and which nothing in the app ever displayed.
        */
-      runtime.generate(buildPrompt(snapshot, instruction), 160),
+      runtime.generate(buildPrompt(snapshot, instruction), 200),
       PLAN_TIMEOUT_MS,
     );
     const elapsedMs = Date.now() - started;

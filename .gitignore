@@ -40,3 +40,7 @@ melody-test.log
 
 # Generated deck artifacts
 docs/WorldJam-Deck.html
+.build/
+sao-samples/
+.models-sao1/
+.models-sa3/

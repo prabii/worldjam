@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { PermissionsAndroid, Platform, StyleSheet, Text, View } from 'react-native';
+import { Alert, PermissionsAndroid, Platform, StyleSheet, Text, View } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { useKeepAwake } from 'expo-keep-awake';
@@ -9,7 +9,8 @@ import { CaptureScreen } from '@/screens/CaptureScreen';
 import { JamScreen } from '@/screens/JamScreen';
 import { JamsScreen } from '@/screens/JamsScreen';
 import { PlayScreen } from '@/screens/PlayScreen';
-import { WhackScreen } from '@/screens/WhackScreen';
+import { PracticeScreen } from '@/screens/PracticeScreen';
+import { GuideButton } from '@/components/GuideButton';
 import { ProfileScreen } from '@/screens/ProfileScreen';
 import { BottomNav, type AppScreen, type NavTab } from '@/components/ui/BottomNav';
 import { useSession } from '@/state/sessionStore';
@@ -23,6 +24,36 @@ export default function App() {
 
   const [screen, setScreen] = useState<AppScreen>('welcome');
   const openSession = useSession((s) => s.openSession);
+  const resetJam = useSession((s) => s.reset);
+
+  /**
+   * The + button starts a jam. With sounds already captured it asks first:
+   * a new jam wipes them, and doing that silently would lose work, while
+   * never doing it meant old sounds kept turning up in every new jam.
+   */
+  const startCapture = () => {
+    const s = useSession.getState();
+    if (s.objects.length === 0 && !s.vocalTake) {
+      setScreen('capture');
+      return;
+    }
+    Alert.alert(
+      'Start a new jam?',
+      `You have ${s.objects.length} sound${s.objects.length === 1 ? '' : 's'} in this jam.`,
+      [
+        { text: 'Add to this jam', onPress: () => setScreen('capture') },
+        {
+          text: 'New jam',
+          style: 'destructive',
+          onPress: () => {
+            resetJam();
+            setScreen('capture');
+          },
+        },
+      ],
+      { cancelable: true },
+    );
+  };
   const [engineError, setEngineError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -76,7 +107,7 @@ export default function App() {
   const activeTab: NavTab =
     screen === 'home' || screen === 'jams' ? 'home' :
     screen === 'profile' ? 'profile' :
-    screen === 'play' || screen === 'whack' ? 'play' :
+    screen === 'play' || screen === 'tiles' ? 'play' :
     'studio';
 
   const navSelect = (t: NavTab) => {
@@ -89,8 +120,7 @@ export default function App() {
   const showNav =
     screen !== 'welcome' &&
     screen !== 'capture' &&
-    screen !== 'play' &&
-    screen !== 'whack';
+    screen !== 'tiles';
 
   return (
     <SafeAreaProvider>
@@ -106,9 +136,9 @@ export default function App() {
             onScan={() => setScreen('capture')}
             onCompose={() => setScreen('jam')}
             onJams={() => setScreen('jams')}
-            onOpenSession={async (id) => {
-              await openSession(id);
-              setScreen('jam');
+            onOpenSession={(id) => {
+              // Saved jams play where they are listed; they do not reopen Studio.
+              void useSession.getState().toggleSavedJam(id);
             }}
           />
         ) : screen === 'capture' ? (
@@ -116,19 +146,19 @@ export default function App() {
         ) : screen === 'jams' ? (
           <JamsScreen
             onBack={() => setScreen('home')}
-            onOpenSession={async (id) => {
-              await openSession(id);
-              setScreen('jam');
+            onOpenSession={(id) => {
+              // Saved jams play where they are listed; they do not reopen Studio.
+              void useSession.getState().toggleSavedJam(id);
             }}
-            onNewJam={() => setScreen('capture')}
+            onNewJam={() => {
+              resetJam();
+              setScreen('capture');
+            }}
           />
         ) : screen === 'play' ? (
-          <PlayScreen
-            onBack={() => setScreen('home')}
-            onWhack={() => setScreen('whack')}
-          />
-        ) : screen === 'whack' ? (
-          <WhackScreen onBack={() => setScreen('home')} />
+          <PracticeScreen onBack={() => setScreen('home')} onTiles={() => setScreen('tiles')} />
+        ) : screen === 'tiles' ? (
+          <PlayScreen onBack={() => setScreen('play')} />
         ) : screen === 'profile' ? (
           <ProfileScreen onBack={() => setScreen('home')} />
         ) : (
@@ -139,9 +169,12 @@ export default function App() {
           <BottomNav
             active={activeTab}
             onSelect={navSelect}
-            onCapture={() => setScreen('capture')}
+            onCapture={startCapture}
           />
         )}
+
+        {/* The AI guide floats everywhere except the welcome and the tiles game. */}
+        {screen !== 'welcome' && screen !== 'tiles' && <GuideButton screen={screen} />}
 
         {engineError && (
           <View style={styles.banner} pointerEvents="none">

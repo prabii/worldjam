@@ -84,12 +84,20 @@ export function chordForDegree(
   };
 }
 
-/** The chord sequence for a style, one chord per bar. */
-export function progressionFor(style: Style, bars: number): Chord[] {
+/**
+ * The chord sequence for a style, one chord per bar.
+ *
+ * `rotation` starts the cycle partway in. The same four chords entered at a
+ * different point land somewhere else emotionally — a chill i-VI-IV-V begun
+ * on IV resolves rather than departs — which is the cheapest honest way to
+ * make a chorus feel unlike the verse that led into it.
+ */
+export function progressionFor(style: Style, bars: number, rotation = 0): Chord[] {
   const p = PROGRESSIONS[style] ?? PROGRESSIONS.chill;
   const out: Chord[] = [];
+  const offset = ((rotation % p.degrees.length) + p.degrees.length) % p.degrees.length;
   for (let bar = 0; bar < bars; bar++) {
-    const degree = p.degrees[bar % p.degrees.length];
+    const degree = p.degrees[(bar + offset) % p.degrees.length];
     out.push(chordForDegree(degree, p.minor, p.sevenths));
   }
   return out;

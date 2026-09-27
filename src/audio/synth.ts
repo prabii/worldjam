@@ -52,6 +52,14 @@ export interface RenderOptions {
   bars: number;
   key: string | null;
   style: Style;
+  /**
+   * Where in the chord cycle this passage starts.
+   *
+   * Left at zero the progression begins where it always does. A section that
+   * wants to feel like an answer rather than a restatement passes a rotation,
+   * and gets the same chords arriving in a different order.
+   */
+  rotation?: number;
 }
 
 /** Octave placement per layer, so parts occupy their own register. */
@@ -97,28 +105,28 @@ function renderEvents(
 
 /** Bass: walks the progression rather than holding a root. */
 export function renderBass(opts: RenderOptions): number[] {
-  const chords = progressionFor(opts.style, opts.bars);
+  const chords = progressionFor(opts.style, opts.bars, opts.rotation ?? 0);
   const events = buildBassline(chords, opts.style);
   return renderEvents(events, opts, 'bass', OCTAVES.bass, 0.85);
 }
 
 /** Chords: voiced with smooth leading between bars. */
 export function renderChords(opts: RenderOptions, pad = false): number[] {
-  const chords = progressionFor(opts.style, opts.bars);
+  const chords = progressionFor(opts.style, opts.bars, opts.rotation ?? 0);
   const events = buildChordVoicing(chords, opts.style);
   return renderEvents(events, opts, pad ? 'pad' : 'keys', OCTAVES.chords, pad ? 0.5 : 0.62);
 }
 
 /** Arpeggio: constant movement over the progression. */
 export function renderArp(opts: RenderOptions): number[] {
-  const chords = progressionFor(opts.style, opts.bars);
+  const chords = progressionFor(opts.style, opts.bars, opts.rotation ?? 0);
   const events = buildArp(chords, opts.style);
   return renderEvents(events, opts, 'pluck', OCTAVES.arp, 0.5);
 }
 
 /** Guitar-style: plucked chord stabs. */
 export function renderGuitar(opts: RenderOptions): number[] {
-  const chords = progressionFor(opts.style, opts.bars);
+  const chords = progressionFor(opts.style, opts.bars, opts.rotation ?? 0);
   const events = buildChordVoicing(chords, opts.style);
 
   const { sampleRate, bpm, bars } = opts;

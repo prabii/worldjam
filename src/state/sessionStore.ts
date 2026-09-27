@@ -3,6 +3,7 @@ import type {
   ArrangementPlan,
   Loop,
   LoopEvent,
+  MusicalRole,
   ObjectCategory,
   Style,
   VocalTake,
@@ -16,7 +17,10 @@ import {
   SLOT_PERC,
   SLOT_TEXTURE,
   SLOT_VOCAL,
+  generateFromMelody,
+  generateTextureClip,
   generateTextureInto,
+  textureEngine,
   textureUnavailableReason,
   allocateSlot,
   clearSlot,
@@ -36,11 +40,22 @@ import { transport } from '@/audio/transport';
 import { renderArrangement } from '@/audio/arrangement';
 import { applyGroove, describeFeel, directTempo } from '@/audio/groove';
 import {
+  buildSectionPrompt,
   buildTexturePrompt,
+  sectionSeed,
   textureEvents,
   textureSeconds,
   textureSeed,
 } from '@/audio/texture';
+import {
+  SECTION_DENSITY,
+  SECTION_GAIN,
+  type SectionKind,
+} from '@/audio/arrangement';
+import { buildSongForm, distinctKinds, renderSong, songBars } from '@/audio/song';
+import { assembleBed, bedEvents } from '@/audio/songBed';
+import { describeObjects, genreTempo, grooveFor, matchGenre } from '@/audio/genres';
+import { monoToStereo, renderMelody, type MelodyInstrument } from '@/audio/melodySynth';
 import {
   EMPTY_GRID,
   beatToStep,
@@ -172,6 +187,23 @@ interface SessionState {
    * edit in AI mode re-renders instantly without asking the model again.
    */
   producerPlan: ArrangementPlan | null;
+  /**
+   * Song mode: the loop becomes a two-minute arrangement with an opening,
+   * two choruses and an ending, rather than eight bars going round.
+   *
+   * Off by default and additive throughout — with it off every path behaves
+   * exactly as it did before, which is what keeps a jam a jam.
+   */
+  songMode: boolean;
+  /** Progress while the song is being built, 0..1, or null when idle. */
+  songProgress: number | null;
+  /** What the song builder is currently doing, for the progress UI. */
+  songStage: string | null;
+  /** Builds the full song: form, accompaniment, then the generated beds. */
+  makeSong: () => Promise<void>;
+  /** Returns to the eight-bar loop. */
+  exitSongMode: () => void;
+
   /** AI texture layer: Stable Audio Open Small, generated on the phone. */
   textureOn: boolean;
   textureStatus: 'idle' | 'unavailable' | 'generating' | 'ready' | 'error';
@@ -223,6 +255,29 @@ interface SessionState {
   removeSession: (id: string) => Promise<void>;
   setStatus: (msg: string | null) => void;
   writeLyrics: (mood?: string) => Promise<void>;
+
+  // --- your tune: a hum or song, heard back three ways ---
+  /** Where the hum-to-song pipeline is. */
+  /**
+   * The genre last asked for. Kept so that arranging again — after capturing
+   * another object, say — stays in that genre instead of snapping back to the
+   * style chip, which is what made the music change style unasked.
+   */
+  currentGenre: string | null;
+  /** The saved jam playing from the jams list, or null. */
+  playingJamId: string | null;
+  /** Plays a saved jam where it is listed; tapping the playing one stops it. */
+  toggleSavedJam: (id: string) => Promise<void>;
+    tuneStatus: 'idle' | 'working' | 'ready' | 'error';
+  tuneMessage: string | null;
+  /** Plays the raw recording, exactly as sung. */
+  playVoice: () => void;
+  /** Plays the detected tune on an instrument. */
+  playTune: (instrument: MelodyInstrument) => void;
+  /** Builds a full song that follows the tune, in a genre. */
+  songFromTune: (genre: string, instrument: MelodyInstrument) => Promise<void>;
+  /** Replays the last song made from the tune, with the voice on top if wanted. */
+  playTuneSong: (withVoice: boolean) => void;
   /** Names artists or a sound to steer the production, e.g. "Charlie Puth". */
   setReference: (ref: string | null) => void;
   /** Spoken guidance for accessibility and hands-free coaching. */
@@ -242,6 +297,23 @@ const LAYER_SLOTS = {
   guitar: SLOT_GUITAR,
   perc: SLOT_PERC,
 } as const;
+
+/**
+ * Which density row governs each accompaniment layer.
+ *
+ * The section table is written in terms of what a part DOES — weight, accent,
+ * movement — rather than what instrument plays it, so the pitched layers all
+ * answer to 'lead' and only the bass carries the low end. Without this the
+ * arp would survive a drop, which is the one section that must not have one.
+ */
+const LAYER_ROLE: Record<string, MusicalRole> = {
+  bass: 'bass',
+  chords: 'lead',
+  pad: 'texture',
+  arp: 'lead',
+  guitar: 'lead',
+  perc: 'perc',
+};
 
 const LIVE_LOOP_ID = 'live';
 const PLAN_LOOP_ID = 'plan';
@@ -276,8 +348,67 @@ export const useSession = create<SessionState>((set, get) => ({
   savedSessions: [],
   savingSession: false,
 
+  currentGenre: null,
+  playingJamId: null,
+
+  toggleSavedJam: async (id) => {
+    const s = get();
+    if (s.playingJamId === id && s.playing) {
+      s.togglePlay();
+      set({ playingJamId: null });
+      return;
+    }
+    // Loading swaps the engine's samples, so stop whatever is sounding first.
+    if (s.playing) s.togglePlay();
+    set({ playingJamId: id });
+    await get().openSession(id);
+    if (get().playingJamId !== id) return; // another jam was tapped meanwhile
+    if (!get().playing) get().togglePlay();
+  },
+  tuneStatus: 'idle',
+  tuneMessage: null,
+
+  playVoice: () => {
+    const take = get().vocalTake;
+    if (!take) {
+      set({ statusMessage: 'Sing or hum something first.' });
+      return;
+    }
+    stopAllVoices();
+    trigger(take.slot, 1, 0.5);
+  },
+
+  playTune: (instrument) => {
+    const take = get().vocalTake;
+    if (!take || take.notes.length < 2) {
+      set({ statusMessage: 'No clear tune found — hum a little louder and longer.' });
+      return;
+    }
+    const pcm = renderMelody(take.notes, sampleRate(), instrument);
+    loadSample(SLOT_TUNE, Array.from(pcm), 1);
+    stopAllVoices();
+    trigger(SLOT_TUNE, 1, 0.5);
+    set({ statusMessage: `Your tune on ${instrument} · ${take.notes.length} notes${take.detectedKey ? ` · ${take.detectedKey}` : ''}` });
+  },
+
+  songFromTune: async (genre, instrument) => {
+    await buildSongFromTune(set, get, genre, instrument);
+  },
+
+  playTuneSong: (withVoice) => {
+    const s = get();
+    if (s.tuneStatus !== 'ready') return;
+    stopAllVoices();
+    trigger(SLOT_TEXTURE, 1, 0.5);
+    if (withVoice && s.vocalTake) trigger(s.vocalTake.slot, 0.9, 0.5);
+  },
+
   armed: false,
   liveEvents: [],
+
+  songMode: false,
+  songProgress: null,
+  songStage: null,
 
   textureOn: true,
   textureStatus: 'idle',
@@ -291,6 +422,18 @@ export const useSession = create<SessionState>((set, get) => ({
 
   regenerateTexture: () => {
     void requestTexture(set, get, true);
+  },
+
+  makeSong: async () => {
+    await buildSong(set, get);
+  },
+
+  exitSongMode: () => {
+    const s = get();
+    set({ songMode: false, songProgress: null, songStage: null });
+    // Re-apply the loop arrangement, which rebuilds every layer at loop
+    // length and puts the transport back to eight bars.
+    if (s.plan) applyPlan(s.producerPlan ?? s.plan, set, get);
   },
 
   grid: EMPTY_GRID,
@@ -771,12 +914,23 @@ export const useSession = create<SessionState>((set, get) => ({
     const bpmHint =
       state.liveEvents.length >= 3 || gridHitCount(state.grid) > 0 ? state.bpm : null;
 
+    // Read the genre off the user's words before the model runs, so the style
+    // it is steered toward — and the rule-based plan used if it times out —
+    // already matches what they asked for. Typing "phonk" with the chill chip
+    // selected must still give phonk.
+    // With no words this time, carry on in the genre asked for last.
+    const words = instruction?.trim() || state.currentGenre || undefined;
+    instruction = words;
+    const asked = matchGenre(words);
+    if (asked) set({ currentGenre: words ?? asked.name });
+    const style = asked?.style ?? state.style;
+
     const result = await generatePlan(
       {
         objects: state.objects,
         vocal: state.vocalTake,
         bpmHint,
-        style: state.style,
+        style,
         mood: undefined,
         melodyDescription: state.melodyDescription ?? undefined,
         reference: state.reference ?? undefined,
@@ -786,7 +940,35 @@ export const useSession = create<SessionState>((set, get) => ({
     );
 
     clearInterval(tick);
-    applyPlan(result.plan, set, get);
+
+    // Carry the user's own words into the plan. The music prompt is built
+    // from these later, and without them a description only ever reached
+    // Gemma — never the model that makes the sound.
+    const said = instruction?.trim() || undefined;
+    const plan: ArrangementPlan = {
+      ...result.plan,
+      request: said,
+      genre: result.plan.genre ?? asked?.name,
+    };
+
+    if (asked) {
+      // The genre's own beat, played by the user's objects. Without this every
+      // genre fell back to the same per-style pattern.
+      const groove = grooveFor(asked, get().objects);
+      if (groove) plan.objectPattern = groove;
+
+      // When the on-device model can make the genre's backing itself, it
+      // leads: the built-in synth only knows six styles and plays the same
+      // chords for every genre that maps to one, which is what made different
+      // genres sound alike. Drum-led genres keep the synth bass for weight.
+      if (/stable audio 3/i.test(textureEngine().name)) {
+        plan.accompaniment = asked.percussion ? ['bass'] : [];
+      }
+    }
+    // A fresh press is a fresh piece of music, even when the prompt matches
+    // the last one; otherwise the texture cache hands back the same file.
+    textureNonce++;
+    applyPlan(plan, set, get);
 
     const info = result.usedFallback
       ? `Rule-based plan${result.error ? ` (${result.error})` : ''}`
@@ -798,8 +980,8 @@ export const useSession = create<SessionState>((set, get) => ({
       arranging: false,
       lastPlanInfo: info,
       statusMessage: `${result.usedFallback ? 'Rule-based' : 'Gemma arranged'} ${
-        result.plan.style
-      } · ${describeFeel(result.plan.style, get().bpm, get().bars)}`,
+        plan.genre ?? plan.style
+      } · ${describeFeel(plan.style, get().bpm, get().bars)}`,
     });
   },
 
@@ -1033,22 +1215,53 @@ export const useSession = create<SessionState>((set, get) => ({
   },
 
   reset: () => {
+    // A new jam starts from nothing. Everything the last one left behind —
+    // sounds, voice, beat grid, genre, song, lyrics, generated music and the
+    // synthesised layers still loaded in their slots — is cleared, or it
+    // leaks into the new jam the moment it plays.
     transport.reset();
+    stopAllVoices();
+    setMetronome(false, get().bpm);
     const current = get();
     for (const o of current.objects) clearSlot(o.slot);
+    for (const slot of [SLOT_VOCAL, SLOT_TEXTURE, SLOT_BASS, SLOT_CHORDS, SLOT_ARP, SLOT_GUITAR, SLOT_PERC]) {
+      clearSlot(slot);
+    }
     current.pcmBySlot.clear();
+    layerCache.clear();
+    loadedTextureKey = null;
+    textureNonce++;
+    transport.setLoops([]);
     set({
       objects: [],
       loops: [],
       vocalTake: null,
+      melodyDescription: null,
       plan: null,
+      producerPlan: null,
+      key: null,
+      bpm: 92,
+      bars: 4,
       liveEvents: [],
       playing: false,
       armed: false,
+      grid: EMPTY_GRID,
+      gridRecording: false,
+      aiMode: false,
+      songMode: false,
+      songProgress: null,
+      songStage: null,
+      currentGenre: null,
+      tuneStatus: 'idle',
+      tuneMessage: null,
+      lyrics: null,
+      textureStatus: 'idle',
+      textureInfo: null,
       accuracyBefore: null,
       accuracyAfter: null,
       lastPlanInfo: null,
-      statusMessage: null,
+      lastExportPath: null,
+      statusMessage: 'New jam — capture your first sound',
     });
   },
 }));
@@ -1090,9 +1303,13 @@ function applyPlan(
     state.objects.filter((o) => fixedLabels.has(o.label.toLowerCase())).map((o) => o.id),
   );
 
+  // A named genre owns its tempo: phonk lives at 140, and folding it into the
+  // nearest legacy style's range would leave it sounding like slow EDM.
+  const genre = matchGenre(rawPlan.request) ?? matchGenre(rawPlan.genre);
+  const directed = directTempo(rawPlan.style, state.objects, rawPlan.bpm);
   const plan: ArrangementPlan = {
     ...layered,
-    bpm: directTempo(rawPlan.style, state.objects, rawPlan.bpm),
+    bpm: genre ? genreTempo(genre, rawPlan.bpm || directed) : directed,
     bars: Math.max(8, rawPlan.bars),
   };
 
@@ -1232,7 +1449,14 @@ function resolveEvent(get: () => SessionState) {
     const hasVocal = s.vocalTake != null && !s.vocalTake.muted;
     if (objectId === 'texture') {
       // Air and colour under the real sounds, never on top of them.
-      return { slot: SLOT_TEXTURE, gain: hasVocal ? 0.35 : 0.55, pan: 0.5 };
+      // A genre bed from the music model carries the track's style, so it
+      // sits up front; a generic texture stays underneath the objects.
+      const leads = s.plan?.genre != null && /stable audio 3/i.test(textureEngine().name);
+      return {
+        slot: SLOT_TEXTURE,
+        gain: leads ? (hasVocal ? 0.6 : 0.85) : hasVocal ? 0.35 : 0.55,
+        pan: 0.5,
+      };
     }
     if (objectId.startsWith('layer:')) {
       const layer = objectId.slice(6) as keyof typeof LAYER_SLOTS;
@@ -1254,11 +1478,29 @@ let loadedTextureKey: string | null = null;
 let textureRunning = false;
 let texturePending = false;
 
+/**
+ * Bumped on every Generate press.
+ *
+ * Folded into the texture's cache key and seed, so asking again gives new
+ * music even when the prompt text comes out the same — which it often did,
+ * and the cache then handed back the identical file.
+ */
+let textureNonce = 0;
+
+/** What the user asked for, in the form the prompt builders take. */
+function intentOf(s: SessionState) {
+  return {
+    instruction: s.plan?.request ?? null,
+    genre: s.plan?.genre ?? null,
+    objects: describeObjects(s.objects),
+  };
+}
+
 function currentTextureKey(s: SessionState): { key: string; prompt: string; seconds: number } | null {
   if (!s.plan) return null;
-  const prompt = buildTexturePrompt(s.plan.style, s.bpm, s.key, s.plan.texture);
-  const seconds = textureSeconds(s.bpm);
-  return { key: `${prompt}|${seconds.toFixed(3)}`, prompt, seconds };
+  const prompt = buildTexturePrompt(s.plan.style, s.bpm, s.key, s.plan.texture, intentOf(s));
+  const seconds = textureSeconds(s.bpm, textureEngine().maxSeconds);
+  return { key: `${prompt}|${seconds.toFixed(3)}|${textureNonce}`, prompt, seconds };
 }
 
 /**
@@ -1298,10 +1540,12 @@ async function requestTexture(
   set({
     textureStatus: 'generating',
     textureInfo: want.prompt,
-    statusMessage: 'Stable Audio is making a texture…',
+    statusMessage: `${textureEngine().name || 'Stable Audio'} is making music…`,
   });
   try {
-    const seed = force ? Math.floor(Math.random() * 1_000_000) : textureSeed(want.prompt);
+    const seed = force
+      ? Math.floor(Math.random() * 1_000_000)
+      : textureSeed(`${want.prompt}|${textureNonce}`);
     const r = await generateTextureInto(want.prompt, want.seconds, seed, SLOT_TEXTURE);
     if (r.ok) {
       loadedTextureKey = want.key;
@@ -1325,6 +1569,305 @@ async function requestTexture(
       void requestTexture(set, get);
     }
   }
+}
+
+/**
+ * The slot that holds the tune played on an instrument.
+ *
+ * Borrowed from the synthesised percussion layer, which the arranger never
+ * asks for (schema.ts whitelists it out), so the two never compete.
+ */
+const SLOT_TUNE = SLOT_PERC;
+
+/**
+ * Hum or sing → a full song that follows the tune.
+ *
+ * The hum is first played back on a clean instrument, because a pitched line
+ * is far easier for the music model to follow than a breathy voice. That
+ * rendering is written to a file and handed to the model as the thing to
+ * build around, with the genre as the prompt. Measured on the dev phone the
+ * result keeps the sung note among its three loudest pitches on every beat.
+ *
+ * The raw voice is never touched; it can be layered back over the result.
+ */
+async function buildSongFromTune(
+  set: (partial: Partial<SessionState>) => void,
+  get: () => SessionState,
+  genre: string,
+  instrument: MelodyInstrument,
+): Promise<void> {
+  const s = get();
+  const take = s.vocalTake;
+  if (!take || take.notes.length < 3) {
+    set({ tuneStatus: 'error', tuneMessage: 'No clear tune found — hum a phrase of at least a few notes.' });
+    return;
+  }
+  if (s.tuneStatus === 'working') return;
+
+  set({ tuneStatus: 'working', tuneMessage: 'Turning your tune into an instrument line…' });
+  await new Promise((r) => setTimeout(r, 0));
+
+  try {
+    // Whole bars, so the song loops cleanly and the model gets a sensible length.
+    const bpm = s.bpm;
+    const barSec = 240 / Math.max(1, bpm);
+    const end = take.notes.reduce((a, n) => Math.max(a, n.time + n.duration), 0);
+    const seconds = Math.min(40, Math.max(barSec * 2, Math.ceil((end + 0.3) / barSec) * barSec));
+
+    const FILE_RATE = 44100;
+    const mono = renderMelody(take.notes, FILE_RATE, instrument, seconds);
+    const wav = encodeWav(monoToStereo(mono), FILE_RATE, 2);
+    const path = `${FileSystem.cacheDirectory}tune-${Date.now()}.wav`;
+    await FileSystem.writeAsStringAsync(path, toBase64(wav), {
+      encoding: FileSystem.EncodingType.Base64,
+    });
+
+    const key = take.detectedKey ?? s.key;
+    const prompt = buildTexturePrompt(
+      matchGenre(genre)?.style ?? s.style,
+      bpm,
+      key,
+      null,
+      {
+        // "song" and "beat" tell the prompt builder drums are wanted: this is
+        // a finished track, not a bed under recorded objects.
+        instruction: `${genre} song with a beat, lead melody`,
+        objects: describeObjects(s.objects),
+      },
+    );
+
+    set({ tuneMessage: `${textureEngine().name || 'The music model'} is writing a ${genre} song around your tune…` });
+    const started = Date.now();
+    const r = await generateFromMelody(prompt, path, seconds, 0.7, Math.floor(Math.random() * 1_000_000));
+    void FileSystem.deleteAsync(path, { idempotent: true }).catch(() => {});
+
+    if (!r.ok || !r.pcm || r.pcm.length === 0) {
+      set({ tuneStatus: 'error', tuneMessage: r.error ?? 'Could not build the song.' });
+      return;
+    }
+
+    loadSample(SLOT_TEXTURE, r.pcm, 1);
+    get().pcmBySlot.set(SLOT_TEXTURE, r.pcm);
+    stopAllVoices();
+    trigger(SLOT_TEXTURE, 1, 0.5);
+    set({
+      tuneStatus: 'ready',
+      tuneMessage: `Your ${genre} song · ${Math.round(seconds)}s · made in ${Math.round((Date.now() - started) / 1000)}s${key ? ` · ${key}` : ''}`,
+    });
+  } catch (err) {
+    set({ tuneStatus: 'error', tuneMessage: err instanceof Error ? err.message : String(err) });
+  }
+}
+
+const SONG_LOOP_ID = 'song';
+
+/**
+ * Builds the full song.
+ *
+ * Three passes, in the order that gets something audible soonest. The object
+ * arrangement and the synthesised backing are fast and deterministic, so the
+ * song starts playing within a second or two. The generated beds take about
+ * 26 s each and arrive afterwards, fading in section by section — the same
+ * bargain requestTexture already makes, at song length.
+ *
+ * Yields to the UI between sections: synthesising two minutes of PCM is
+ * hundreds of thousands of samples per layer, and without a yield the
+ * progress bar would not paint until the work it is reporting had finished.
+ */
+async function buildSong(
+  set: (partial: Partial<SessionState>) => void,
+  get: () => SessionState,
+): Promise<void> {
+  const state = get();
+  if (!state.plan) {
+    set({ statusMessage: 'Arrange something first.' });
+    return;
+  }
+  if (state.songProgress != null) return;
+
+  const plan = state.plan;
+  const form = buildSongForm(plan.style);
+  const totalBars = songBars(form);
+  const sr = sampleRate();
+
+  set({
+    songMode: true,
+    songProgress: 0,
+    songStage: 'Writing the arrangement…',
+    statusMessage: null,
+  });
+
+  const yieldToUi = () => new Promise<void>((r) => setTimeout(r, 0));
+  await yieldToUi();
+
+  // --- 1. the objects, across the whole form ---
+  const userBeat = gridToPattern(state.grid, state.objects);
+  const fixedLabels = new Set(userBeat.map((u) => u.object.toLowerCase()));
+  const fixedIds = new Set(
+    state.objects.filter((o) => fixedLabels.has(o.label.toLowerCase())).map((o) => o.id),
+  );
+
+  const objectEvents = applyGroove(
+    renderSong({
+      objects: state.objects,
+      objectPattern: plan.objectPattern,
+      form,
+      fixed: fixedLabels,
+    }),
+    {
+      style: plan.style,
+      bpm: plan.bpm,
+      objects: state.objects,
+      totalBeats: totalBars * 4,
+      fixedIds,
+    },
+  );
+
+  set({ songProgress: 0.15, songStage: 'Playing the parts…' });
+  await yieldToUi();
+
+  // --- 2. the synthesised backing, per section ---
+  const layerEvents: LoopEvent[] = [];
+  const rendered = new Set<number>();
+
+  for (const layer of plan.accompaniment) {
+    const slot = LAYER_SLOTS[layer];
+    if (rendered.has(slot)) continue;
+    rendered.add(slot);
+
+    const buffer = new Float32Array(
+      Math.ceil((totalBars * 4 * 60) / Math.max(1, plan.bpm)) * sr + sr,
+    );
+
+    for (let i = 0; i < form.length; i++) {
+      const section = form[i];
+      const density = SECTION_DENSITY[section.kind];
+      // A layer the section silences is simply not rendered there; that
+      // absence is what makes an intro sound like an intro.
+      const role = LAYER_ROLE[layer];
+      if ((density[role] ?? 1) <= 0) continue;
+
+      const pcm = renderLayer(layer, {
+        sampleRate: sr,
+        bpm: plan.bpm,
+        bars: section.bars,
+        key: state.key,
+        style: plan.style,
+        // A chorus starts the chord cycle two degrees in, so it lands
+        // somewhere other than where the verse did.
+        rotation: section.kind === 'chorus' || section.kind === 'drop' ? 2 : 0,
+      });
+
+      const gain = SECTION_GAIN[section.kind] * (density[role] ?? 1);
+      const start = Math.round(
+        (section.startBar * 4 * 60 * sr) / Math.max(1, plan.bpm),
+      );
+      for (let f = 0; f < pcm.length && start + f < buffer.length; f++) {
+        buffer[start + f] += pcm[f] * gain;
+      }
+
+      if (i % 2 === 1) await yieldToUi();
+    }
+
+    loadSample(slot, Array.from(buffer), 1);
+    state.pcmBySlot.set(slot, Array.from(buffer));
+    layerEvents.push({ objectId: `layer:${layer}`, beat: 0, velocity: 1 });
+
+    set({ songProgress: 0.15 + 0.35 * (rendered.size / Math.max(1, plan.accompaniment.length)) });
+    await yieldToUi();
+  }
+
+  // --- 3. play what we have, before waiting on the generator ---
+  const songLoop: Loop = {
+    id: SONG_LOOP_ID,
+    name: 'Song',
+    events: [...objectEvents, ...layerEvents].sort((a, b) => a.beat - b.beat),
+    bars: totalBars,
+    muted: false,
+    createdAt: Date.now(),
+  };
+
+  // The loop and plan loops would double every hit; the song replaces them.
+  const loops = [songLoop];
+  transport.setResolver(resolveEvent(get));
+  transport.setTempo(plan.bpm, totalBars);
+  transport.setLoops(loops);
+  set({
+    loops,
+    bars: totalBars,
+    songProgress: 0.5,
+    songStage: 'Generating the beds…',
+  });
+
+  if (!get().playing) get().togglePlay();
+
+  // --- 4. the generated beds, one per distinct section kind ---
+  if (get().textureOn && !textureUnavailableReason()) {
+    const kinds = distinctKinds(form);
+    const clips = new Map<SectionKind, number[]>();
+
+    for (let k = 0; k < kinds.length; k++) {
+      const kind = kinds[k];
+      if (!get().songMode) return; // user backed out mid-build
+
+      const prompt = buildSectionPrompt(
+        kind,
+        plan.style,
+        plan.bpm,
+        state.key,
+        plan.texture,
+        intentOf(get()),
+      );
+      set({
+        songStage: `Generating the ${kind}…`,
+        songProgress: 0.5 + 0.45 * (k / kinds.length),
+      });
+
+      const r = await generateTextureClip(
+        prompt,
+        // As long as the section, up to what the engine makes in one call.
+        // SA3 covers an eight-bar section whole; the older engine's clip is
+        // looped to fill it by assembleBed.
+        Math.min(
+          ((form.find((f) => f.kind === kind)?.bars ?? 4) * 240) / Math.max(1, plan.bpm),
+          textureEngine().maxSeconds,
+        ),
+        // Shared nonce: the song's sections agree with each other, but a new
+        // song is new music.
+        sectionSeed(`${prompt}|${textureNonce}`),
+      );
+      if (r.ok && r.pcm && r.pcm.length > 0) clips.set(kind, r.pcm);
+    }
+
+    if (clips.size > 0) {
+      const bed = assembleBed(
+        form,
+        (i) => {
+          const pcm = clips.get(form[i].kind);
+          return pcm ? { pcm } : null;
+        },
+        plan.bpm,
+        sr,
+      );
+      loadSample(SLOT_TEXTURE, Array.from(bed), 1);
+      state.pcmBySlot.set(SLOT_TEXTURE, Array.from(bed));
+
+      const withBed: Loop = {
+        ...songLoop,
+        events: [...songLoop.events, ...bedEvents()].sort((a, b) => a.beat - b.beat),
+      };
+      transport.setLoops([withBed]);
+      set({ loops: [withBed] });
+    }
+  }
+
+  set({
+    songProgress: null,
+    songStage: null,
+    statusMessage: `Song ready · ${totalBars} bars · ${Math.round(
+      (totalBars * 4 * 60) / plan.bpm,
+    )}s`,
+  });
 }
 
 /** Last parameters each accompaniment slot was rendered with. */
@@ -1369,7 +1912,7 @@ function syncBeatLoops(
     loops = upsertLoop(loops, {
       id: TEXTURE_LOOP_ID,
       name: 'AI texture',
-      events: textureEvents(s.bpm, s.bars),
+      events: textureEvents(s.bpm, s.bars, textureEngine().maxSeconds),
       bars: s.bars,
       muted: hasBeat && !s.aiMode,
       createdAt: Date.now(),

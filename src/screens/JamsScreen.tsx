@@ -9,19 +9,34 @@ import { colors, radius, spacing, type } from '@/theme';
 
 interface Props {
   onBack: () => void;
-  onOpenSession: (id: string) => void;
+  /** Unused here since jams play in place; kept so callers need not change. */
+  onOpenSession?: (id: string) => void;
   onNewJam: () => void;
 }
 
-export function JamsScreen({ onBack, onOpenSession, onNewJam }: Props) {
+export function JamsScreen({ onBack, onNewJam }: Props) {
   const insets = useSafeAreaInsets();
   const savedSessions = useSession((s) => s.savedSessions);
   const refreshSessions = useSession((s) => s.refreshSessions);
   const removeSession = useSession((s) => s.removeSession);
+  const toggleSavedJam = useSession((s) => s.toggleSavedJam);
+  const playingJamId = useSession((s) => s.playingJamId);
+  const playing = useSession((s) => s.playing);
 
   useEffect(() => {
     void refreshSessions();
   }, [refreshSessions]);
+
+  // Leaving the list stops the jam it was playing; it should not follow the
+  // user into another screen.
+  useEffect(
+    () => () => {
+      const st = useSession.getState();
+      if (st.playingJamId && st.playing) st.togglePlay();
+      useSession.setState({ playingJamId: null });
+    },
+    [],
+  );
 
   return (
     <View style={styles.root}>
@@ -65,14 +80,14 @@ export function JamsScreen({ onBack, onOpenSession, onNewJam }: Props) {
                 key={s.id}
                 onPress={() => {
                   Haptics.selectionAsync().catch(() => {});
-                  onOpenSession(s.id);
+                  void toggleSavedJam(s.id);
                 }}
                 onLongPress={() => {
                   Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
                   removeSession(s.id);
                 }}
                 accessibilityRole="button"
-                accessibilityLabel={`Open ${s.name}`}
+                accessibilityLabel={`${playingJamId === s.id && playing ? 'Stop' : 'Play'} ${s.name}`}
                 accessibilityHint="Long press to delete"
                 style={styles.jamCard}
               >
@@ -95,8 +110,17 @@ export function JamsScreen({ onBack, onOpenSession, onNewJam }: Props) {
                   </Text>
                 </View>
 
-                <View style={styles.jamPlay}>
-                  <View style={styles.jamPlayTri} />
+                <View
+                  style={[
+                    styles.jamPlay,
+                    playingJamId === s.id && playing && styles.jamPlayOn,
+                  ]}
+                >
+                  {playingJamId === s.id && playing ? (
+                    <View style={styles.jamStop} />
+                  ) : (
+                    <View style={styles.jamPlayTri} />
+                  )}
                 </View>
               </Pressable>
             ))}
@@ -169,6 +193,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  jamPlayOn: { borderColor: colors.live, backgroundColor: 'rgba(48,209,88,0.15)' },
+  jamStop: { width: 12, height: 12, borderRadius: 2, backgroundColor: colors.live },
   jamPlayTri: {
     width: 0,
     height: 0,

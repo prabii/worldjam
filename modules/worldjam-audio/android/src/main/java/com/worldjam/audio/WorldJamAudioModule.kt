@@ -103,6 +103,21 @@ class WorldJamAudioModule : Module() {
             if (gen == null) "no app context" else gen.unavailableReason()
         }
 
+        /**
+         * Which music model will run, and the longest clip it makes per call.
+         *
+         * The UI names the model actually in use rather than a hard-coded one,
+         * and the song builder sizes its requests to what the engine can make.
+         */
+        Function("textureEngine") {
+            val gen = textureGen()
+            val engine = gen?.engine()
+            mapOf(
+                "name" to (engine?.label ?: ""),
+                "maxSeconds" to (gen?.maxSeconds() ?: 0.0),
+            )
+        }
+
         AsyncFunction("generateTexture") { prompt: String, seconds: Double, seed: Int, slot: Int, promise: Promise ->
             val gen = textureGen()
             if (gen == null) {
@@ -125,6 +140,69 @@ class WorldJamAudioModule : Module() {
                     promise.resolve(mapOf("ok" to false, "error" to (e.message ?: e.toString())))
                 }
             }.apply { name = "worldjam-texture" }.start()
+        }
+
+        /**
+         * Generates a clip and hands the samples back instead of loading them.
+         *
+         * A song's bed is several generations laid end to end, and the joining
+         * is done in JS where the section layout lives. Returning the audio is
+         * what makes that possible — `generateTexture` loads straight into a
+         * slot, which is right for the looping texture but would let each
+         * section overwrite the one before.
+         */
+        AsyncFunction("generateTextureClip") { prompt: String, seconds: Double, seed: Int, promise: Promise ->
+            val gen = textureGen()
+            if (gen == null) {
+                promise.resolve(mapOf("ok" to false, "error" to "no app context"))
+                return@AsyncFunction
+            }
+            Thread {
+                try {
+                    val r = gen.generate(prompt, seconds, seed, nativeSampleRate(), 6)
+                    promise.resolve(
+                        mapOf(
+                            "ok" to true,
+                            "elapsedMs" to r.elapsedMs.toDouble(),
+                            "frames" to r.pcm.size,
+                            // Doubles, because the bridge has no float array.
+                            "pcm" to r.pcm.map { it.toDouble() },
+                            "log" to r.log,
+                        ),
+                    )
+                } catch (e: Throwable) {
+                    promise.resolve(mapOf("ok" to false, "error" to (e.message ?: e.toString())))
+                }
+            }.apply { name = "worldjam-texture-clip" }.start()
+        }
+
+        /**
+         * Builds music around a melody: the WAV at [initPath] (a hummed or sung
+         * tune, rendered on an instrument) seeds the model, which answers with
+         * a full arrangement that follows it. Resolves with the samples.
+         */
+        AsyncFunction("generateFromMelody") { prompt: String, initPath: String, seconds: Double, noise: Double, seed: Int, promise: Promise ->
+            val gen = textureGen()
+            if (gen == null) {
+                promise.resolve(mapOf("ok" to false, "error" to "no app context"))
+                return@AsyncFunction
+            }
+            Thread {
+                try {
+                    val path = initPath.removePrefix("file://")
+                    val r = gen.generate(prompt, seconds, seed, nativeSampleRate(), 6, path, noise)
+                    promise.resolve(
+                        mapOf(
+                            "ok" to true,
+                            "elapsedMs" to r.elapsedMs.toDouble(),
+                            "frames" to r.pcm.size,
+                            "pcm" to r.pcm.map { it.toDouble() },
+                        ),
+                    )
+                } catch (e: Throwable) {
+                    promise.resolve(mapOf("ok" to false, "error" to (e.message ?: e.toString())))
+                }
+            }.apply { name = "worldjam-melody" }.start()
         }
 
         // --- ARCore: world-anchored sound objects ---------------------------

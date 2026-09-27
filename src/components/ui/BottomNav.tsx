@@ -15,7 +15,7 @@ export type AppScreen =
   | 'jam'
   | 'jams'
   | 'play'
-  | 'whack'
+  | 'tiles'
   | 'profile';
 
 interface Props {

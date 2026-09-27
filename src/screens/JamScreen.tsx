@@ -18,6 +18,7 @@ import { QuantizePanel } from '@/components/QuantizePanel';
 import { RhythmGuide } from '@/components/RhythmGuide';
 import { BeatGridPanel } from '@/components/BeatGridPanel';
 import { FrequencyVisualizer } from '@/components/FrequencyVisualizer';
+import { TuneCard } from '@/components/TuneCard';
 import { gridHitCount } from '@/audio/beatGrid';
 import { TrackPlayer } from '@/components/TrackPlayer';
 import { TransportBar } from '@/components/TransportBar';
@@ -40,6 +41,28 @@ import { colors, radius, spacing, type } from '@/theme';
  * The jam surface — panels 4 through 8 of the product mockups, in the order
  * the demo walks them: voice, guide, arrange, layers, vibes, player.
  */
+/**
+ * Genres shown as one-tap chips. The label is what gets sent, so each one
+ * must match a keyword in src/audio/genres.ts — that is where its
+ * instruments and tempo come from.
+ */
+const GENRE_CHIPS = [
+  { label: 'Mass beat', emoji: '🥁', color: '#FF9F0A' },
+  { label: 'Indian classical', emoji: '🪕', color: '#FFD60A' },
+  { label: 'Bollywood', emoji: '🎬', color: '#BF5AF2' },
+  { label: 'Bhangra', emoji: '💃', color: '#FF375F' },
+  { label: 'Carnatic', emoji: '🎻', color: '#64D2FF' },
+  { label: 'Hip hop', emoji: '🎤', color: '#30D158' },
+  { label: 'Pop', emoji: '✨', color: '#0A84FF' },
+  { label: 'Phonk', emoji: '🔥', color: '#FF453A' },
+  { label: 'Trap', emoji: '💎', color: '#5E5CE6' },
+  { label: 'Lofi', emoji: '☕', color: '#AC8E68' },
+  { label: 'EDM', emoji: '⚡', color: '#66D4CF' },
+  { label: 'Afrobeats', emoji: '🌍', color: '#FFCC00' },
+  { label: 'Jazz', emoji: '🎷', color: '#D0A0FF' },
+  { label: 'Cinematic', emoji: '🎞️', color: '#8E8E93' },
+];
+
 export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture: () => void }) {
   const insets = useSafeAreaInsets();
   const [showQuantize, setShowQuantize] = useState(false);
@@ -170,6 +193,13 @@ export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture
           </View>
         </View>
 
+        {/* --- your tune: voice, instrument, and a song built on it --- */}
+        {s.vocalTake && (
+          <View style={styles.sectionPad}>
+            <TuneCard />
+          </View>
+        )}
+
         {/* --- rhythm guide (panel 5): for plans made without a grid beat --- */}
         {gridHitCount(s.grid) === 0 && s.plan && (
           <View style={styles.sectionPad}>
@@ -229,14 +259,45 @@ export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture
         {/* --- prompt-based beat generator --- */}
         <View style={styles.sectionPad}>
           <View style={styles.promptCard}>
-            <Text style={styles.promptTitle}>Describe your beat</Text>
+            <Text style={styles.promptTitle}>Pick a genre or describe your beat</Text>
             <Text style={styles.promptHint}>
-              Tell the AI what vibe you want — it'll arrange your sounds to match.
+              Tap a genre to generate instantly, or type anything — your words go
+              straight to the music model, built around your own sounds.
             </Text>
+
+            {/* One tap per genre: fills the prompt and generates. */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.genreRow}
+            >
+              {GENRE_CHIPS.map((g) => {
+                const on = prompt.trim().toLowerCase() === g.label.toLowerCase();
+                return (
+                  <Pressable
+                    key={g.label}
+                    onPress={() => {
+                      setPrompt(g.label);
+                      if (s.objects.length > 0 && !s.arranging) void s.arrange(g.label);
+                    }}
+                    disabled={s.arranging}
+                    style={[
+                      styles.genreChip,
+                      { borderColor: on ? g.color : colors.border },
+                      on && { backgroundColor: `${g.color}26` },
+                    ]}
+                  >
+                    <Text style={styles.genreEmoji}>{g.emoji}</Text>
+                    <Text style={[styles.genreText, on && { color: g.color }]}>{g.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
             <TextInput
               value={prompt}
               onChangeText={setPrompt}
-              placeholder="e.g. lo-fi chill with heavy bass, fast EDM drop..."
+              placeholder="e.g. mass beat for a festival, sad Bollywood pop, dark phonk…"
               placeholderTextColor={colors.textFaint}
               style={styles.promptInput}
               multiline
@@ -280,6 +341,18 @@ export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture
             {s.lastPlanInfo && (
               <Text style={styles.promptResult} numberOfLines={2}>
                 Last: {s.lastPlanInfo}
+              </Text>
+            )}
+            {s.plan?.genre && (
+              <Text style={styles.promptResult}>
+                Genre: {s.plan.genre} · {s.bpm} BPM
+              </Text>
+            )}
+            {s.textureInfo && (
+              // The exact text sent to the music model, so it is visible that
+              // the description reached it.
+              <Text style={styles.musicPrompt} numberOfLines={3}>
+                🎵 {s.textureInfo}
               </Text>
             )}
           </View>
@@ -332,6 +405,40 @@ export function JamScreen({ onBack, onCapture }: { onBack: () => void; onCapture
               }}
               accessibilityLabel="Save this jam"
             />
+          </View>
+        )}
+
+        {/*
+          Turning the loop into a song.
+
+          The loop is eight bars going round; this builds the two-minute
+          version with an opening, two choruses and an ending, and asks the
+          music model for a different bed under each section. The arrangement
+          plays within a second or two and the beds fade in as they generate,
+          so the wait is audible progress rather than a blank screen.
+        */}
+        {s.plan && (
+          <View style={styles.sectionPad}>
+            <Pressable
+              onPress={() => (s.songMode ? s.exitSongMode() : void s.makeSong())}
+              disabled={s.songProgress != null}
+              style={[styles.songBtn, s.songProgress != null && styles.songBtnBusy]}
+            >
+              <Text style={styles.songBtnText}>
+                {s.songProgress != null
+                  ? `${s.songStage ?? 'Working…'} ${Math.round((s.songProgress ?? 0) * 100)}%`
+                  : s.songMode
+                    ? '← Back to the loop'
+                    : '♫  Make it a Song  ·  ~2 min'}
+              </Text>
+              {s.songProgress != null && (
+                <View style={styles.songBar}>
+                  <View
+                    style={[styles.songBarFill, { width: `${Math.round((s.songProgress ?? 0) * 100)}%` }]}
+                  />
+                </View>
+              )}
+            </Pressable>
           </View>
         )}
 
@@ -429,6 +536,26 @@ const styles = StyleSheet.create({
   },
   scroll: { gap: spacing.lg },
   sectionPad: { paddingHorizontal: spacing.lg },
+  songBtn: {
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    borderColor: colors.ai,
+    backgroundColor: 'rgba(191,90,242,0.12)',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  songBtnBusy: { opacity: 0.8, borderColor: colors.border },
+  songBtnText: { ...type.label, fontSize: 15, color: colors.ai, textAlign: 'center' },
+  songBar: {
+    height: 3,
+    alignSelf: 'stretch',
+    borderRadius: 2,
+    backgroundColor: 'rgba(255,255,255,0.1)',
+    overflow: 'hidden',
+  },
+  songBarFill: { height: 3, backgroundColor: colors.ai },
 
   lyricButton: {
     paddingVertical: spacing.md,
@@ -467,6 +594,20 @@ const styles = StyleSheet.create({
   },
   promptTitle: { ...type.label, fontSize: 15, color: colors.text },
   promptHint: { ...type.caption, color: colors.textDim, lineHeight: 16 },
+  genreRow: { gap: spacing.sm, paddingVertical: spacing.xs },
+  genreChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.pill,
+    borderWidth: 1.5,
+    backgroundColor: colors.surfaceSolid,
+  },
+  genreEmoji: { fontSize: 15 },
+  genreText: { ...type.label, fontSize: 13, color: colors.text },
+  musicPrompt: { ...type.caption, fontSize: 11, color: colors.ai, lineHeight: 15 },
   promptInput: {
     ...type.body,
     color: colors.text,

@@ -832,38 +832,20 @@ export function PlayScreen({ onBack, onWhack }: Props) {
           </View>
 
           <Text style={styles.readyHow}>
-            Hold the phone up so the camera sees your feet.{'\n'}
-            Tap your foot <Text style={styles.readyEm}>left</Text>,{' '}
+            Tap the <Text style={styles.readyEm}>left</Text>,{' '}
             <Text style={styles.readyEm}>centre</Text> or{' '}
-            <Text style={styles.readyEm}>right</Text> as each tile lands.{'\n'}
+            <Text style={styles.readyEm}>right</Text> lane as each tile lands.{'\n'}
             Three misses and you&apos;re out.
           </Text>
 
-          {footSig ? (
-            <Pressable onPress={beginCalibration} style={styles.arPrompt}>
-              <Text style={[styles.arPromptText, { color: colors.live }]}>
-                👟 Foot tracking on — recalibrate
-              </Text>
-            </Pressable>
-          ) : (
-            <Pressable onPress={beginCalibration} style={styles.calCta}>
-              <Text style={styles.calCtaText}>👟 Point at your foot to start</Text>
-            </Pressable>
-          )}
-
-          <Pressable
-            onPress={footSig ? startGame : beginCalibration}
-            style={styles.primaryBtn}
-          >
+          <Pressable onPress={startGame} style={styles.primaryBtn}>
             <LinearGradient
-              colors={footSig ? gradients.brand : ['#2A2A32', '#22222A']}
+              colors={gradients.brand}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 1 }}
               style={styles.primaryInner}
             >
-              <Text style={styles.primaryText}>
-                {footSig ? 'Start' : 'Calibrate to start'}
-              </Text>
+              <Text style={styles.primaryText}>Start</Text>
             </LinearGradient>
           </Pressable>
           <Pressable onPress={() => setStep('source')} style={styles.ghost}>
@@ -1018,18 +1000,25 @@ export function PlayScreen({ onBack, onWhack }: Props) {
           )}
 
           {/*
-            The three lanes, as seen through the camera.
-
-            Nothing here is touchable: the player is holding the phone up with
-            one hand and playing with their feet, so every trigger comes from
-            the tracker. These are the targets the foot is aimed at, lit by
-            whichever lane last fired.
+            The three lanes. The whole column is the touch target, so a tap
+            anywhere in the left third fires the left lane.
           */}
-          <View style={styles.laneLayer} pointerEvents="none">
+          <View style={[styles.laneLayer, { top: insets.top + 44 }]}>
             {LANE_PALETTE.map((lp, i) => {
               const down = pressedLane === i;
               return (
-                <View key={i} style={styles.laneColumn}>
+                <Pressable
+                  key={i}
+                  style={styles.laneColumn}
+                  onPressIn={() => {
+                    setPressedLane(i);
+                    strike(i);
+                  }}
+                  onPressOut={() => setPressedLane(null)}
+                  android_disableSound
+                  accessibilityRole="button"
+                  accessibilityLabel={`Lane ${i + 1}, ${laneLabels[i]}`}
+                >
                   <View
                     style={[
                       StyleSheet.absoluteFill,
@@ -1075,7 +1064,7 @@ export function PlayScreen({ onBack, onWhack }: Props) {
                       </Text>
                     </View>
                   </View>
-                </View>
+                </Pressable>
               );
             })}
           </View>

@@ -1,3 +1,4 @@
+import { textureEngine } from '@/audio/engine';
 import React from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Switch, Text, View } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
@@ -164,8 +165,10 @@ function TextureRow({
     <View style={styles.texture}>
       <View style={styles.textureHead}>
         <View style={{ flex: 1 }}>
-          <Text style={styles.textureTitle}>AI texture layer</Text>
-          <Text style={styles.textureBy}>Stable Audio Open Small · Powered by Stability AI</Text>
+          <Text style={styles.textureTitle}>AI music layer</Text>
+          <Text style={styles.textureBy}>
+            {textureEngine().name || 'Stable Audio'} · on-device · Stability AI
+          </Text>
         </View>
         {on && status === 'generating' && <ActivityIndicator size="small" color={colors.ai} />}
         <Switch
