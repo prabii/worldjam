@@ -58,23 +58,24 @@ export function MyJamsScreen({ bottomInset }: { bottomInset: number }) {
   }, [text]);
   useEffect(() => setLimit(PAGE), [section, search, sort, captureFilter, trackFilter]);
 
-  const { data, loading, error } = useLibraryQuery<{ items: Array<Capture | Track | Lyric>; total: number }>(
+  const { data, loading, error } = useLibraryQuery<{ section: Section; items: Array<Capture | Track | Lyric>; total: number }>(
     async (lib) => {
       if (section === 'captures') {
         const q = { search, sort, types: CAPTURE_FILTERS[captureFilter].types ?? undefined };
-        return { items: await lib.captures.list({ ...q, limit }), total: await lib.captures.count(q) };
+        return { section: 'captures', items: await lib.captures.list({ ...q, limit }), total: await lib.captures.count(q) };
       }
       if (section === 'tracks') {
         const q = { search, sort, modes: TRACK_FILTERS[trackFilter].modes ?? undefined };
-        return { items: await lib.tracks.list({ ...q, limit }), total: await lib.tracks.count(q) };
+        return { section: 'tracks', items: await lib.tracks.list({ ...q, limit }), total: await lib.tracks.count(q) };
       }
       const q = { search, sort };
-      return { items: await lib.lyrics.list({ ...q, limit }), total: await lib.lyrics.count(q) };
+      return { section: 'lyrics', items: await lib.lyrics.list({ ...q, limit }), total: await lib.lyrics.count(q) };
     },
     [section, search, sort, captureFilter, trackFilter, limit],
   );
 
-  const items = data?.items ?? [];
+  // Right after a tab switch the previous tab's rows are still in `data`: never render them with the new tab's card.
+  const items = data && data.section === section ? data.items : [];
   const header = useMemo(
     () => (
       <View style={{ gap: space.md, paddingBottom: space.md }}>
@@ -131,7 +132,7 @@ export function MyJamsScreen({ bottomInset }: { bottomInset: number }) {
           </View>
         )}
         <Text style={font.caption}>
-          {loading && !data ? 'Loading…' : `${data?.total ?? 0} ${section}${search ? ` matching “${search}”` : ''} · ${SORTS.find((s) => s.value === sort)?.label}`}
+          {(loading && !data) || data?.section !== section ? 'Loading…' : `${data?.total ?? 0} ${section}${search ? ` matching “${search}”` : ''} · ${SORTS.find((s) => s.value === sort)?.label}`}
         </Text>
         {error ? <Text style={[font.label, { color: color.error }]}>{error}</Text> : null}
       </View>

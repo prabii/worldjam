@@ -195,7 +195,7 @@ export function TrackCard({ track, onOpen }: { track: Track; onOpen: () => void 
             {meta}
           </Text>
           <Text style={font.caption} numberOfLines={1}>
-            {track.sources.map((s) => s.name).join(', ')}
+            {(track.sources ?? []).map((s) => s.name).join(', ')}
           </Text>
         </View>
         <PlayButton
@@ -205,13 +205,13 @@ export function TrackCard({ track, onOpen }: { track: Track; onOpen: () => void 
           onPress={() => uri && void toggle(track.id, uri)}
         />
       </Pressable>
-      <Peaks peaks={downsample(track.peaks, 48)} progress={progress} height={22} />
+      <Peaks peaks={downsample(track.peaks ?? [], 48)} progress={progress} height={22} />
     </View>
   );
 }
 
 export function LyricCard({ lyric, onOpen }: { lyric: Lyric; onOpen: () => void }) {
-  const firstLines = lyric.text.split('\n').filter((l) => l.trim()).slice(0, 2).join(' / ');
+  const firstLines = (lyric.text ?? '').split('\n').filter((l) => l.trim()).slice(0, 2).join(' / ');
   return (
     <Pressable onPress={onOpen} style={[styles.card, styles.row]} accessibilityRole="button" accessibilityLabel={`${lyric.name}, lyrics`}>
       <View style={[styles.thumb, styles.trackArt]}>
@@ -225,7 +225,7 @@ export function LyricCard({ lyric, onOpen }: { lyric: Lyric; onOpen: () => void 
           {firstLines || 'Empty'}
         </Text>
         <Text style={font.mono}>
-          {[lyric.style, lyric.language.toUpperCase(), formatDate(lyric.updatedAt)].filter(Boolean).join(' · ')}
+          {[lyric.style, (lyric.language ?? 'en').toUpperCase(), formatDate(lyric.updatedAt)].filter(Boolean).join(' · ')}
         </Text>
       </View>
       <Icon name="edit" size={20} />
