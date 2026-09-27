@@ -14,7 +14,7 @@ import { toast } from '../components/Toasts';
 import { Button, Field, IconButton, Segmented, Sheet } from '../components/ui';
 import type { CaptureType } from '../contracts/library';
 import { useNav } from '../nav/store';
-import { discard, normalizeTake, saveAudioCapture, saveVideoCapture, startAudioTake, stopAudioTake, takeLevel } from '../services/capture';
+import { discard, lastNoiseReduction, normalizeTake, saveAudioCapture, saveVideoCapture, startAudioTake, stopAudioTake, takeLevel } from '../services/capture';
 import { stop as stopPlayer, toggle, usePlayer } from '../services/player';
 import { addSources } from '../services/studio';
 import { accentGradient, color, font, formatDuration, radius, space } from '../theme';
@@ -30,6 +30,8 @@ interface Pending {
   uri: string;
   durationMs: number;
   suggested: string | null;
+  /** Background noise removed (dB); null = nothing to remove / not measured. */
+  cleanedDb: number | null;
 }
 
 /**
@@ -92,7 +94,7 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
         camera.current.startRecording({
           fileType: 'mp4',
           onRecordingFinished: (v) => {
-            setPending({ kind: 'video', uri: v.path, durationMs: Math.round(v.duration * 1000), suggested: suggestion.current });
+            setPending({ kind: 'video', uri: v.path, durationMs: Math.round(v.duration * 1000), suggested: suggestion.current, cleanedDb: null });
             enterReview(suggestion.current, 'Video');
           },
           onRecordingError: (e) => {
@@ -138,7 +140,7 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
     setPhase('saving');
     // Level the take now so the review preview is already at full volume.
     await normalizeTake(taken.uri.replace(/^file:\/\//, ''));
-    setPending({ kind: 'audio', uri: taken.uri, durationMs: Math.round((taken.info.frames / taken.info.sampleRate) * 1000), suggested: suggestion.current });
+    setPending({ kind: 'audio', uri: taken.uri, durationMs: Math.round((taken.info.frames / taken.info.sampleRate) * 1000), suggested: suggestion.current, cleanedDb: lastNoiseReduction() });
     enterReview(suggestion.current, mode === 'HUM' ? 'Hum' : 'Sound');
   };
 
@@ -156,10 +158,12 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
     try {
       const meta = { name: name.trim() || 'Untitled sound', description: description.trim(), detectedLabel: pending.suggested, inLibrary: sessionId ? keepInLibrary : true };
       const type: CaptureType = pending.kind === 'video' ? 'VIDEO' : mode === 'HUM' ? 'HUM' : 'AUDIO';
-      const c = pending.kind === 'video' ? await saveVideoCapture(pending.uri, meta) : await saveAudioCapture(pending.uri, type as 'AUDIO' | 'HUM', meta);
+      const c = pending.kind === 'video' ? await saveVideoCapture(pending.uri, meta) : await saveAudioCapture(pending.uri, type as 'AUDIO' | 'HUM', meta, { alreadyClean: true });
       if (sessionId) await addSources([c.id]);
       setSavedCount((n) => n + 1);
-      toast(sessionId ? (meta.inLibrary ? 'Added to Studio and saved to My Jams' : 'Added to this Studio session') : 'Saved to My Jams', 'success');
+      const cleaned = pending.kind === 'video' ? lastNoiseReduction() : pending.cleanedDb;
+      const noise = cleaned != null && cleaned >= 1 ? ` · background noise −${Math.round(cleaned)} dB` : '';
+      toast(`${sessionId ? (meta.inLibrary ? 'Added to Studio and saved to My Jams' : 'Added to this Studio session') : 'Saved to My Jams'}${noise}`, 'success');
       setPending(null);
       setPhase('ready');
     } catch (err) {
@@ -258,6 +262,11 @@ export function CaptureScreen({ sessionId }: { sessionId?: string }) {
               <Text style={font.label}>
                 {pending.kind === 'video' ? 'Video' : mode === 'HUM' ? 'Hum' : 'Sound'} · {formatDuration(pending.durationMs)}
                 {pending.suggested ? ` · camera saw “${pending.suggested}”` : ''}
+                {pending.kind === 'video'
+                  ? ' · background noise is removed when you save'
+                  : pending.cleanedDb != null && pending.cleanedDb >= 1
+                    ? ` · background noise removed −${Math.round(pending.cleanedDb)} dB`
+                    : ' · no background noise to remove'}
               </Text>
             </View>
             <Field label="Name" value={name} onChangeText={setName} maxLength={60} returnKeyType="next" />

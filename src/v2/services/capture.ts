@@ -122,11 +122,20 @@ export interface CaptureMeta {
  * records very quietly — bring every take up to a healthy level before it is
  * analysed, played or used in Studio. Older builds skip this silently.
  */
+let lastCleanDb: number | null = null;
+
+/** Background noise removed from the most recent take (dB), or null if it could not be measured. */
+export function lastNoiseReduction(): number | null {
+  return lastCleanDb;
+}
+
 export async function normalizeTake(path: string): Promise<boolean> {
+  lastCleanDb = null;
   if (!isMediaModuleAvailable) return false;
   try {
     // Noise cancellation first (only the captured object/voice stays), then level.
-    await WorldJamMedia.cleanWav(path, -1, 42);
+    const r = await WorldJamMedia.cleanWav(path, -1, 42);
+    lastCleanDb = r.noiseReducedDb;
     return true;
   } catch {
     try {
@@ -139,10 +148,11 @@ export async function normalizeTake(path: string): Promise<boolean> {
 }
 
 /** Audio/hum/vocal take → library capture (atomic: files first, then one DB row). */
-export async function saveAudioCapture(tempUri: string, type: Exclude<CaptureType, 'VIDEO'>, meta: CaptureMeta): Promise<Capture> {
+export async function saveAudioCapture(tempUri: string, type: Exclude<CaptureType, 'VIDEO'>, meta: CaptureMeta, opts: { alreadyClean?: boolean } = {}): Promise<Capture> {
   const s = await mediaStore();
   const lib = await getLibrary();
-  await normalizeTake(pathOf(tempUri));
+  // Never clean twice: a second pass would subtract what is left of the sound itself.
+  if (!opts.alreadyClean) await normalizeTake(pathOf(tempUri));
   const probe = await WorldJamMedia.probe(pathOf(tempUri)).catch(() => null);
   const features = await analyze(pathOf(tempUri), type);
   const sha = await WorldJamMedia.sha256(pathOf(tempUri)).catch(() => null);
