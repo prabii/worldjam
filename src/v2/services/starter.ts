@@ -10,6 +10,7 @@ import { compilePlan, RENDERER_VERSION, type InventoryItem } from '../audio/plan
 import type { Capture, CaptureType } from '../contracts/library';
 import type { StyleId } from '../contracts/musicPlan';
 import type { SqlLibrary } from '../data/repos';
+import { WorldJamMedia } from '../../../modules/worldjam-media/src';
 import { mediaStore, saveAudioCapture } from './capture';
 import { compileDeps, renderToFile } from './engineLink';
 import { notifyLibraryChanged } from './library';
@@ -59,6 +60,11 @@ const TRACKS: Array<{ name: string; description: string; style: StyleId; duratio
     sounds: ['knock', 'snap', 'rice', 'glass', 'bottle', 'band', 'hum'],
     lyrics: 'rain on the window',
   },
+];
+
+/** Finished tracks that ship as audio (no arrangement to reopen in Studio). */
+const FINISHED: Array<{ file: number; name: string; description: string }> = [
+  { file: require('../../../assets/library/sunset-jam.wav'), name: 'Sunset Jam', description: 'A full jam, produced on the phone' },
 ];
 
 const MARKER = 'v2/.library-1';
@@ -144,6 +150,38 @@ async function run(lib: SqlLibrary): Promise<void> {
       versions: { model: 'built-in director', kb: KB_VERSION, systemPrompt: SYSTEM_PROMPT_VERSION, renderer: RENDERER_VERSION },
     });
     if (lyricId) await lib.lyrics.update(lyricId, { sourceTrackId: track.id });
+    notifyLibraryChanged();
+  }
+
+  const now = await lib.tracks.list({ limit: 5000 });
+  for (const f of FINISHED) {
+    if (now.some((t) => t.name === f.name)) continue;
+    const a = Asset.fromModule(f.file);
+    await a.downloadAsync();
+    if (!a.localUri) throw new Error(`missing ${f.name}`);
+    const temp = store.tempUri('wav');
+    await FileSystem.copyAsync({ from: a.localUri, to: temp });
+    const path = temp.replace(/^file:\/\//, '');
+    const probe = await WorldJamMedia.probe(path);
+    const peaks = await WorldJamMedia.wavPeaks(path, 200).catch(() => [] as number[]);
+    const asset = await store.commit(temp, { kind: 'AI_TRACK', dir: 'track', ext: 'wav', mimeType: 'audio/wav', durationMs: probe.durationMs, sampleRate: probe.sampleRate ?? 48000, channels: probe.channels ?? 2 });
+    await lib.tracks.create({
+      name: f.name,
+      description: f.description,
+      mode: 'AI',
+      audioAssetId: asset.id,
+      durationMs: probe.durationMs,
+      bpm: null,
+      key: null,
+      scale: null,
+      style: null,
+      plan: null,
+      peaks,
+      lyricId: null,
+      prompt: null,
+      sources: [],
+      versions: { model: null, kb: KB_VERSION, systemPrompt: SYSTEM_PROMPT_VERSION, renderer: RENDERER_VERSION },
+    });
     notifyLibraryChanged();
   }
 
