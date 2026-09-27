@@ -3,6 +3,7 @@
 #include <oboe/Oboe.h>
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -13,8 +14,9 @@ namespace worldjam {
 
 constexpr int kSampleRate = 48000;
 constexpr int kChannelCount = 2;
-constexpr int kMaxVoices = 32;
-constexpr int kMaxSlots = 16;
+// V2: up to 64 soundboard pads plus the reserved accompaniment slots.
+constexpr int kMaxVoices = 64;
+constexpr int kMaxSlots = 80;
 
 /**
  * A captured real-world sound. Immutable once loaded: the audio callback reads
@@ -34,7 +36,9 @@ struct Sample {
 struct Voice {
     std::atomic<bool> active{false};
     int slot{-1};
-    size_t position{0};
+    double position{0}; // fractional, so a voice can play pitched
+    float rate{1.0f};   // 1 = as recorded; 2 = an octave up
+    bool loop{false};   // restart at the end until stopped
     float gain{1.0f};
     float pan{0.5f};       // 0 = hard left, 1 = hard right
     int64_t startFrame{0}; // engine frame at which playback begins
@@ -49,6 +53,17 @@ struct TriggerRequest {
     float gain;
     float pan;
     int64_t atFrame; // -1 means "as soon as possible"
+    float rate;
+    bool loop;
+};
+
+/** What a record-to-file take produced. */
+struct RecordingInfo {
+    bool ok{false};
+    int64_t frames{0};
+    int sampleRate{0};
+    float peak{0.0f};
+    float rms{0.0f};
 };
 
 class WorldJamEngine : public oboe::AudioStreamDataCallback,
@@ -61,19 +76,28 @@ public:
 
     // --- sample management (called off the audio thread) ---
     bool loadSampleFromPCM(int slot, const float* pcm, size_t frames, float gain);
+    /** Reads a WAV (PCM16/24/32 or float32, any rate/channels) straight into a slot, trimmed to [startSec, endSec). */
+    bool loadSampleFromWav(int slot, const std::string& path, float gain, double startSec, double endSec);
     void clearSlot(int slot);
 
     // --- performance ---
     /** Fire a sample immediately. Returns the engine frame it was scheduled at. */
-    int64_t trigger(int slot, float gain, float pan);
+    int64_t trigger(int slot, float gain, float pan, float rate = 1.0f, bool loop = false);
     /** Schedule a sample at an absolute engine frame (used by the beat grid). */
-    void triggerAt(int slot, float gain, float pan, int64_t frame);
+    void triggerAt(int slot, float gain, float pan, int64_t frame, float rate = 1.0f, bool loop = false);
     void stopAllVoices();
+    /** Silences every voice playing a slot (looping pads). */
+    void stopSlot(int slot);
 
     // --- recording ---
     bool startRecording();
     /** Stops capture and hands back the recorded mono buffer. */
     std::vector<float> stopRecording();
+    /** Streams the microphone straight to a PCM16 mono WAV, so long takes never sit in memory. */
+    bool startRecordingToFile(const std::string& path);
+    RecordingInfo stopRecordingToFile();
+    /** Recent input peak 0..1 while recording, for a live level meter. */
+    float inputLevel() const { return mInputLevel.load(std::memory_order_relaxed); }
     bool isRecording() const { return mRecording.load(std::memory_order_acquire); }
 
     // --- transport / clock ---
@@ -124,6 +148,11 @@ private:
     std::vector<float> mRecordBuffer;
     std::mutex mRecordMutex;
     std::thread mRecordThread;
+    FILE* mRecordFile{nullptr};
+    int64_t mRecordFrames{0};
+    double mRecordSumSq{0.0};
+    float mRecordPeak{0.0f};
+    std::atomic<float> mInputLevel{0.0f};
 
     std::atomic<bool> mMetronomeOn{false};
     std::atomic<double> mMetronomeBpm{90.0};

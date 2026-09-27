@@ -7,7 +7,8 @@ import type { LatencyReport } from '@/types';
  * as go/no-go.
  */
 
-export const MAX_SLOTS = 16;
+/** Matches kMaxSlots in WorldJamEngine.h (64 V2 pads + reserved accompaniment slots). */
+export const MAX_SLOTS = 80;
 /** Slots reserved at the top for accompaniment layers, the AI texture and the vocal take. */
 export const RESERVED_SLOTS = 7;
 export const OBJECT_SLOTS = MAX_SLOTS - RESERVED_SLOTS;

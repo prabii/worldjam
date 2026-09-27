@@ -1,4 +1,4 @@
-import { requireOptionalNativeModule } from 'expo-modules-core';
+import { requireOptionalNativeModule, type EventSubscription } from 'expo-modules-core';
 
 /**
  * The native engine's surface. Every call is synchronous: a tap must reach the
@@ -55,6 +55,44 @@ export interface WorldJamAudioNative {
    * `slot` as a mono sample, trimmed and faded to loop. ~18 s on an iQOO 15.
    */
   generateTexture?(prompt: string, seconds: number, seed: number, slot: number): Promise<TextureResult>;
+
+  // --- V2: pitched/looping pads, file-based samples and takes -------------
+
+  /** rate = 2^(semitones/12); loop repeats until stopSlot. Returns the engine frame. */
+  triggerPitched?(slot: number, gain: number, pan: number, rate: number, loop: boolean): number;
+  triggerAtPitched?(slot: number, gain: number, pan: number, frame: number, rate: number, loop: boolean): void;
+  stopSlot?(slot: number): void;
+  /** Loads a WAV straight into a slot, trimmed to [startSec, endSec) (endSec <= 0 = to the end). */
+  loadSampleFromWav?(slot: number, path: string, gain: number, startSec: number, endSec: number): Promise<boolean>;
+  /** Streams the microphone to a PCM16 mono WAV at `path` (absolute, no file://). */
+  startRecordingToFile?(path: string): boolean;
+  stopRecordingToFile?(): RecordingInfo;
+  /** Recent input peak 0..1 while recording. */
+  inputLevel?(): number;
+
+  // --- V2: ACE-Step 1.5 AI production ------------------------------------
+
+  aceStepUnavailableReason?(): string | null;
+  /** Runs acestep.cpp on `srcPath` (cover-nofsq); resolves with the produced WAV. */
+  aceStepGenerate?(requestJson: string, srcPath: string, outDir: string, threads: number): Promise<AceStepResult>;
+  aceStepCancel?(): void;
+  addListener?(event: 'onAceProgress', listener: (e: { progress: number; stage: string }) => void): EventSubscription;
+}
+
+export interface RecordingInfo {
+  ok: boolean;
+  frames: number;
+  sampleRate: number;
+  peak: number;
+  rms: number;
+}
+
+export interface AceStepResult {
+  ok: boolean;
+  path?: string;
+  elapsedMs?: number;
+  log?: string;
+  error?: string;
 }
 
 export interface TextureResult {

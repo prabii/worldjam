@@ -99,4 +99,57 @@ Java_com_worldjam_audio_WorldJamAudioModule_nativeSetMetronome(JNIEnv*, jobject,
     WorldJamEngine::instance().setMetronome(on == JNI_TRUE, bpm);
 }
 
+// --- V2 --------------------------------------------------------------------
+
+JNIEXPORT jlong JNICALL
+Java_com_worldjam_audio_WorldJamAudioModule_nativeTriggerPitched(JNIEnv*, jobject, jint slot, jfloat gain,
+                                                                 jfloat pan, jfloat rate, jboolean loop) {
+    return static_cast<jlong>(WorldJamEngine::instance().trigger(slot, gain, pan, rate, loop == JNI_TRUE));
+}
+
+JNIEXPORT void JNICALL
+Java_com_worldjam_audio_WorldJamAudioModule_nativeTriggerAtPitched(JNIEnv*, jobject, jint slot, jfloat gain,
+                                                                   jfloat pan, jlong frame, jfloat rate,
+                                                                   jboolean loop) {
+    WorldJamEngine::instance().triggerAt(slot, gain, pan, static_cast<int64_t>(frame), rate, loop == JNI_TRUE);
+}
+
+JNIEXPORT void JNICALL
+Java_com_worldjam_audio_WorldJamAudioModule_nativeStopSlot(JNIEnv*, jobject, jint slot) {
+    WorldJamEngine::instance().stopSlot(slot);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_worldjam_audio_WorldJamAudioModule_nativeLoadSampleFromWav(JNIEnv* env, jobject, jint slot, jstring path,
+                                                                    jfloat gain, jdouble startSec, jdouble endSec) {
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    const bool ok = WorldJamEngine::instance().loadSampleFromWav(slot, p, gain, startSec, endSec);
+    env->ReleaseStringUTFChars(path, p);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+JNIEXPORT jboolean JNICALL
+Java_com_worldjam_audio_WorldJamAudioModule_nativeStartRecordingToFile(JNIEnv* env, jobject, jstring path) {
+    const char* p = env->GetStringUTFChars(path, nullptr);
+    const bool ok = WorldJamEngine::instance().startRecordingToFile(p);
+    env->ReleaseStringUTFChars(path, p);
+    return ok ? JNI_TRUE : JNI_FALSE;
+}
+
+/** [ok, frames, sampleRate, peak, rms] — flat to keep the bridge trivial. */
+JNIEXPORT jdoubleArray JNICALL
+Java_com_worldjam_audio_WorldJamAudioModule_nativeStopRecordingToFile(JNIEnv* env, jobject) {
+    const worldjam::RecordingInfo r = WorldJamEngine::instance().stopRecordingToFile();
+    const jdouble vals[5] = {r.ok ? 1.0 : 0.0, static_cast<jdouble>(r.frames), static_cast<jdouble>(r.sampleRate),
+                             r.peak, r.rms};
+    jdoubleArray out = env->NewDoubleArray(5);
+    if (out != nullptr) env->SetDoubleArrayRegion(out, 0, 5, vals);
+    return out;
+}
+
+JNIEXPORT jfloat JNICALL
+Java_com_worldjam_audio_WorldJamAudioModule_nativeInputLevel(JNIEnv*, jobject) {
+    return WorldJamEngine::instance().inputLevel();
+}
+
 } // extern "C"

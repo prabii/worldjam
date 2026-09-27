@@ -32,7 +32,11 @@ class TextureGenerator(private val context: Context) {
     }
 
     private val binary: File get() = File(context.applicationInfo.nativeLibraryDir, "libsatgen.so")
-    private val modelsDir: File get() = File(context.filesDir, "sao")
+    /** Internal files first (the in-app downloader), then external files (adb-pushable on release builds). */
+    private val modelsDir: File get() = listOfNotNull(
+        File(context.filesDir, "sao"),
+        context.getExternalFilesDir(null)?.let { File(it, "sao") },
+    ).firstOrNull { dir -> listOf(DIT, T5, AE).all { File(dir, it).isFile } } ?: File(context.filesDir, "sao")
 
     /** Why generation cannot run, or null when it can. */
     fun unavailableReason(): String? {

@@ -29,6 +29,13 @@ class WorldJamAudioModule : Module() {
     private external fun nativeBufferFrames(): Int
     private external fun nativeSetMasterGain(gain: Float)
     private external fun nativeSetMetronome(on: Boolean, bpm: Double)
+    private external fun nativeTriggerPitched(slot: Int, gain: Float, pan: Float, rate: Float, loop: Boolean): Long
+    private external fun nativeTriggerAtPitched(slot: Int, gain: Float, pan: Float, frame: Long, rate: Float, loop: Boolean)
+    private external fun nativeStopSlot(slot: Int)
+    private external fun nativeLoadSampleFromWav(slot: Int, path: String, gain: Float, startSec: Double, endSec: Double): Boolean
+    private external fun nativeStartRecordingToFile(path: String): Boolean
+    private external fun nativeStopRecordingToFile(): DoubleArray
+    private external fun nativeInputLevel(): Float
 
     /**
      * Created lazily: constructing it eagerly would load ARCore classes on
@@ -37,6 +44,12 @@ class WorldJamAudioModule : Module() {
     private var ar: ArSessionManager? = null
 
     private var texture: TextureGenerator? = null
+    private var ace: AceStepGenerator? = null
+
+    private fun aceGen(): AceStepGenerator? {
+        val ctx = appContext.reactContext ?: return null
+        return ace ?: AceStepGenerator(ctx).also { ace = it }
+    }
 
     private fun textureGen(): TextureGenerator? {
         val ctx = appContext.reactContext ?: return null
@@ -55,6 +68,8 @@ class WorldJamAudioModule : Module() {
 
     override fun definition() = ModuleDefinition {
         Name("WorldJamAudio")
+
+        Events("onAceProgress")
 
         Function("start") { nativeStart() }
         Function("stop") { nativeStop() }
@@ -126,6 +141,58 @@ class WorldJamAudioModule : Module() {
                 }
             }.apply { name = "worldjam-texture" }.start()
         }
+
+        // --- V2: pitched/looping pads, file-based samples and takes --------
+
+        Function("triggerPitched") { slot: Int, gain: Float, pan: Float, rate: Float, loop: Boolean ->
+            nativeTriggerPitched(slot, gain, pan, rate, loop).toDouble()
+        }
+        Function("triggerAtPitched") { slot: Int, gain: Float, pan: Float, frame: Double, rate: Float, loop: Boolean ->
+            nativeTriggerAtPitched(slot, gain, pan, frame.toLong(), rate, loop)
+        }
+        Function("stopSlot") { slot: Int -> nativeStopSlot(slot) }
+        AsyncFunction("loadSampleFromWav") { slot: Int, path: String, gain: Float, startSec: Double, endSec: Double ->
+            nativeLoadSampleFromWav(slot, path, gain, startSec, endSec)
+        }
+        Function("startRecordingToFile") { path: String -> nativeStartRecordingToFile(path) }
+        Function("stopRecordingToFile") {
+            val r = nativeStopRecordingToFile()
+            mapOf(
+                "ok" to (r[0] > 0.5),
+                "frames" to r[1],
+                "sampleRate" to r[2],
+                "peak" to r[3],
+                "rms" to r[4],
+            )
+        }
+        Function("inputLevel") { nativeInputLevel().toDouble() }
+
+        // --- V2: ACE-Step 1.5 AI production (separate process) -------------
+
+        Function("aceStepUnavailableReason") {
+            val gen = aceGen()
+            if (gen == null) "no app context" else gen.unavailableReason()
+        }
+
+        AsyncFunction("aceStepGenerate") { requestJson: String, srcPath: String, outDir: String, threads: Int, promise: Promise ->
+            val gen = aceGen()
+            if (gen == null) {
+                promise.resolve(mapOf("ok" to false, "error" to "no app context"))
+                return@AsyncFunction
+            }
+            Thread {
+                try {
+                    val r = gen.generate(requestJson, srcPath, outDir, threads) { progress, stage ->
+                        sendEvent("onAceProgress", mapOf("progress" to progress, "stage" to stage))
+                    }
+                    promise.resolve(mapOf("ok" to true, "path" to r.path, "elapsedMs" to r.elapsedMs.toDouble(), "log" to r.log))
+                } catch (e: Throwable) {
+                    promise.resolve(mapOf("ok" to false, "error" to (e.message ?: e.toString())))
+                }
+            }.apply { name = "worldjam-acestep" }.start()
+        }
+
+        Function("aceStepCancel") { ace?.cancel() }
 
         // --- ARCore: world-anchored sound objects ---------------------------
         // Every function degrades rather than throws, so a device without

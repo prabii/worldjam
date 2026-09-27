@@ -187,13 +187,13 @@ void WorldJamEngine::clearSlot(int slot) {
 // Triggering
 // ---------------------------------------------------------------------------
 
-int64_t WorldJamEngine::trigger(int slot, float gain, float pan) {
+int64_t WorldJamEngine::trigger(int slot, float gain, float pan, float rate, bool loop) {
     const int64_t now = currentFrame();
-    triggerAt(slot, gain, pan, -1);
+    triggerAt(slot, gain, pan, -1, rate, loop);
     return now;
 }
 
-void WorldJamEngine::triggerAt(int slot, float gain, float pan, int64_t frame) {
+void WorldJamEngine::triggerAt(int slot, float gain, float pan, int64_t frame, float rate, bool loop) {
     if (slot < 0 || slot >= kMaxSlots) return;
 
     const uint32_t w = mTriggerWrite.load(std::memory_order_relaxed);
@@ -203,12 +203,19 @@ void WorldJamEngine::triggerAt(int slot, float gain, float pan, int64_t frame) {
         return;
     }
 
-    mTriggerRing[w % kTriggerRingSize] = TriggerRequest{slot, gain, pan, frame};
+    const float safeRate = (rate > 0.05f && rate < 8.0f) ? rate : 1.0f;
+    mTriggerRing[w % kTriggerRingSize] = TriggerRequest{slot, gain, pan, frame, safeRate, loop};
     mTriggerWrite.store(w + 1, std::memory_order_release);
 }
 
 void WorldJamEngine::stopAllVoices() {
     for (auto& v : mVoices) v.active.store(false, std::memory_order_release);
+}
+
+void WorldJamEngine::stopSlot(int slot) {
+    for (auto& v : mVoices) {
+        if (v.slot == slot) v.active.store(false, std::memory_order_release);
+    }
 }
 
 int WorldJamEngine::findFreeVoice() {
@@ -218,7 +225,7 @@ int WorldJamEngine::findFreeVoice() {
     // All busy: steal the voice that has played longest, which is the least
     // likely to still be audible.
     int oldest = 0;
-    size_t furthest = 0;
+    double furthest = 0;
     for (int i = 0; i < kMaxVoices; ++i) {
         if (mVoices[i].position > furthest) {
             furthest = mVoices[i].position;
@@ -243,6 +250,8 @@ void WorldJamEngine::drainTriggerQueue(int64_t blockStartFrame, int32_t numFrame
         v.slot = req.slot;
         v.gain = req.gain;
         v.pan = req.pan;
+        v.rate = req.rate;
+        v.loop = req.loop;
         v.position = 0;
         // Late scheduled hits fire at the block start rather than being dropped.
         v.startFrame = (req.atFrame < 0) ? blockStartFrame
@@ -282,6 +291,9 @@ oboe::DataCallbackResult WorldJamEngine::onAudioReady(oboe::AudioStream* stream,
         }
 
         const size_t total = sample->data.size();
+        const float* data = sample->data.data();
+        // Last index that still has a right neighbour for interpolation.
+        const double end = static_cast<double>(total) - 1.0;
         const float gain = v.gain * sample->gain * master;
         const float gl = gain * std::sqrt(1.0f - v.pan);
         const float gr = gain * std::sqrt(v.pan);
@@ -290,11 +302,18 @@ oboe::DataCallbackResult WorldJamEngine::onAudioReady(oboe::AudioStream* stream,
             std::max<int64_t>(0, v.startFrame - blockStart));
 
         for (int32_t i = offset; i < numFrames; ++i) {
-            if (v.position >= total) {
-                v.active.store(false, std::memory_order_release);
-                break;
+            if (v.position >= end) {
+                if (v.loop && end > 1.0) {
+                    v.position -= end;
+                } else {
+                    v.active.store(false, std::memory_order_release);
+                    break;
+                }
             }
-            const float s = sample->data[v.position++];
+            const size_t i0 = static_cast<size_t>(v.position);
+            const float frac = static_cast<float>(v.position - static_cast<double>(i0));
+            const float s = data[i0] + (data[i0 + 1] - data[i0]) * frac;
+            v.position += v.rate;
             out[i * 2] += s * gl;
             out[i * 2 + 1] += s * gr;
         }
@@ -392,8 +411,25 @@ void WorldJamEngine::recordLoop() {
         }
         const int got = res.value();
         if (got > 0) {
+            float peak = 0.0f;
+            for (int i = 0; i < got; ++i) peak = std::max(peak, std::fabs(chunk[i]));
+            // Fast attack, slow release: a meter the eye can follow.
+            mInputLevel.store(std::max(peak, mInputLevel.load(std::memory_order_relaxed) * 0.85f),
+                              std::memory_order_relaxed);
             std::lock_guard<std::mutex> lock(mRecordMutex);
-            mRecordBuffer.insert(mRecordBuffer.end(), chunk, chunk + got);
+            if (mRecordFile != nullptr) {
+                int16_t pcm[kChunk];
+                for (int i = 0; i < got; ++i) {
+                    const float x = std::max(-1.0f, std::min(1.0f, chunk[i]));
+                    pcm[i] = static_cast<int16_t>(std::lrint(x * 32767.0f));
+                    mRecordSumSq += static_cast<double>(x) * x;
+                }
+                mRecordPeak = std::max(mRecordPeak, peak);
+                std::fwrite(pcm, sizeof(int16_t), static_cast<size_t>(got), mRecordFile);
+                mRecordFrames += got;
+            } else {
+                mRecordBuffer.insert(mRecordBuffer.end(), chunk, chunk + got);
+            }
         }
     }
 }
@@ -409,6 +445,175 @@ std::vector<float> WorldJamEngine::stopRecording() {
     std::vector<float> out = std::move(mRecordBuffer);
     mRecordBuffer.clear();
     return out;
+}
+
+// ---------------------------------------------------------------------------
+// V2: record straight to a WAV file
+// ---------------------------------------------------------------------------
+
+namespace {
+
+void writeWavHeader(FILE* f, int sampleRate, int channels, uint32_t dataBytes) {
+    auto u32 = [f](uint32_t v) { std::fwrite(&v, 4, 1, f); };
+    auto u16 = [f](uint16_t v) { std::fwrite(&v, 2, 1, f); };
+    std::fwrite("RIFF", 1, 4, f);
+    u32(36 + dataBytes);
+    std::fwrite("WAVEfmt ", 1, 8, f);
+    u32(16);
+    u16(1); // PCM
+    u16(static_cast<uint16_t>(channels));
+    u32(static_cast<uint32_t>(sampleRate));
+    u32(static_cast<uint32_t>(sampleRate * channels * 2));
+    u16(static_cast<uint16_t>(channels * 2));
+    u16(16);
+    std::fwrite("data", 1, 4, f);
+    u32(dataBytes);
+}
+
+} // namespace
+
+bool WorldJamEngine::startRecordingToFile(const std::string& path) {
+    if (mRecording.load(std::memory_order_acquire)) return false;
+    FILE* f = std::fopen(path.c_str(), "wb");
+    if (f == nullptr) {
+        LOGE("Cannot open %s for recording", path.c_str());
+        return false;
+    }
+    // Placeholder header; sizes are patched in stopRecordingToFile().
+    writeWavHeader(f, mStreamSampleRate, 1, 0);
+    {
+        std::lock_guard<std::mutex> lock(mRecordMutex);
+        mRecordFile = f;
+        mRecordFrames = 0;
+        mRecordSumSq = 0.0;
+        mRecordPeak = 0.0f;
+    }
+    if (!startRecording()) {
+        std::lock_guard<std::mutex> lock(mRecordMutex);
+        std::fclose(mRecordFile);
+        mRecordFile = nullptr;
+        return false;
+    }
+    return true;
+}
+
+RecordingInfo WorldJamEngine::stopRecordingToFile() {
+    RecordingInfo info;
+    if (!mRecording.load(std::memory_order_acquire)) return info;
+    mRecording.store(false, std::memory_order_release);
+    if (mRecordThread.joinable()) mRecordThread.join();
+    closeRecordStream();
+    mInputLevel.store(0.0f, std::memory_order_relaxed);
+
+    std::lock_guard<std::mutex> lock(mRecordMutex);
+    if (mRecordFile == nullptr) return info;
+    const auto dataBytes = static_cast<uint32_t>(mRecordFrames * 2);
+    std::fseek(mRecordFile, 0, SEEK_SET);
+    writeWavHeader(mRecordFile, mStreamSampleRate, 1, dataBytes);
+    std::fclose(mRecordFile);
+    mRecordFile = nullptr;
+
+    info.ok = mRecordFrames > 0;
+    info.frames = mRecordFrames;
+    info.sampleRate = mStreamSampleRate;
+    info.peak = mRecordPeak;
+    info.rms = mRecordFrames > 0 ? static_cast<float>(std::sqrt(mRecordSumSq / static_cast<double>(mRecordFrames))) : 0.0f;
+    return info;
+}
+
+// ---------------------------------------------------------------------------
+// V2: load a slot straight from a WAV file (no PCM through the JS bridge)
+// ---------------------------------------------------------------------------
+
+bool WorldJamEngine::loadSampleFromWav(int slot, const std::string& path, float gain,
+                                       double startSec, double endSec) {
+    FILE* f = std::fopen(path.c_str(), "rb");
+    if (f == nullptr) return false;
+    std::fseek(f, 0, SEEK_END);
+    const long size = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    if (size < 44) {
+        std::fclose(f);
+        return false;
+    }
+    std::vector<uint8_t> bytes(static_cast<size_t>(size));
+    const size_t read = std::fread(bytes.data(), 1, bytes.size(), f);
+    std::fclose(f);
+    if (read != bytes.size() || std::memcmp(bytes.data(), "RIFF", 4) != 0 || std::memcmp(bytes.data() + 8, "WAVE", 4) != 0) {
+        return false;
+    }
+
+    auto rd16 = [&](size_t o) { return static_cast<uint16_t>(bytes[o] | (bytes[o + 1] << 8)); };
+    auto rd32 = [&](size_t o) {
+        return static_cast<uint32_t>(bytes[o] | (bytes[o + 1] << 8) | (bytes[o + 2] << 16) | (static_cast<uint32_t>(bytes[o + 3]) << 24));
+    };
+
+    int format = 1, channels = 1, rate = kSampleRate, bits = 16;
+    size_t pos = 12, dataStart = 0, dataLen = 0;
+    while (pos + 8 <= bytes.size()) {
+        const uint32_t chunk = rd32(pos + 4);
+        const size_t body = pos + 8;
+        if (std::memcmp(bytes.data() + pos, "fmt ", 4) == 0 && body + 16 <= bytes.size()) {
+            format = rd16(body);
+            channels = std::max(1, static_cast<int>(rd16(body + 2)));
+            rate = static_cast<int>(rd32(body + 4));
+            bits = rd16(body + 14);
+            if (format == 0xFFFE && chunk >= 26) format = rd16(body + 24); // WAVE_FORMAT_EXTENSIBLE
+        } else if (std::memcmp(bytes.data() + pos, "data", 4) == 0) {
+            dataStart = body;
+            dataLen = std::min<size_t>(chunk, bytes.size() - body);
+            break;
+        }
+        pos = body + chunk + (chunk & 1u);
+    }
+    const int bytesPer = bits / 8;
+    if (dataLen == 0 || bytesPer == 0 || rate <= 0) return false;
+    const size_t frames = dataLen / static_cast<size_t>(bytesPer * channels);
+
+    // Decode + downmix to mono.
+    std::vector<float> mono(frames);
+    for (size_t i = 0; i < frames; ++i) {
+        float sum = 0.0f;
+        for (int c = 0; c < channels; ++c) {
+            const size_t o = dataStart + (i * channels + c) * bytesPer;
+            float x = 0.0f;
+            if (format == 3 && bits == 32) {
+                uint32_t u = rd32(o);
+                std::memcpy(&x, &u, 4);
+            } else if (bits == 16) {
+                x = static_cast<int16_t>(rd16(o)) / 32768.0f;
+            } else if (bits == 24) {
+                int32_t v = static_cast<int32_t>((bytes[o] << 8) | (bytes[o + 1] << 16) | (bytes[o + 2] << 24)) >> 8;
+                x = v / 8388608.0f;
+            } else if (bits == 32) {
+                x = static_cast<int32_t>(rd32(o)) / 2147483648.0f;
+            } else {
+                return false;
+            }
+            sum += x;
+        }
+        mono[i] = sum / static_cast<float>(channels);
+    }
+
+    // Trim.
+    const size_t from = std::min(frames, static_cast<size_t>(std::max(0.0, startSec) * rate));
+    size_t to = frames;
+    if (endSec > 0.0) to = std::min(frames, static_cast<size_t>(endSec * rate));
+    if (to <= from) return false;
+
+    // Resample to the stream rate (linear is plenty for one-shot pads).
+    const double ratio = static_cast<double>(rate) / mStreamSampleRate;
+    const size_t outFrames = static_cast<size_t>((to - from) / ratio);
+    if (outFrames == 0) return false;
+    std::vector<float> out(outFrames);
+    for (size_t i = 0; i < outFrames; ++i) {
+        const double x = from + i * ratio;
+        const size_t i0 = std::min(static_cast<size_t>(x), to - 1);
+        const size_t i1 = std::min(i0 + 1, to - 1);
+        const float t = static_cast<float>(x - static_cast<double>(i0));
+        out[i] = mono[i0] + (mono[i1] - mono[i0]) * t;
+    }
+    return loadSampleFromPCM(slot, out.data(), out.size(), gain);
 }
 
 } // namespace worldjam
